@@ -44,7 +44,7 @@ The mobile app works entirely offline. A server only adds multi-device sync.
 - Groups (encrypted folders): filter from the vault, rename/delete without
   deleting items, and assign from the item editor.
 - Security report: weak, reused, missing-2FA and stale passwords.
-- Folders, favorites, search and type filters.
+- Groups, favorites, search and type filters.
 - Biometric unlock (Face ID / fingerprint) with the derived key in the device
   keychain, background auto-lock (5/15/30 minutes or never), and lock-now.
 - Encrypted backup export (ciphertext + KDF parameters) and device reset.
