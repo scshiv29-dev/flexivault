@@ -15,11 +15,10 @@ differ. Uninstall the personal build before installing the F-Droid build.
 
 ## Before the first release
 
-1. Choose a FOSS license. F-Droid requires one. A good fit for a self-hosted
-   service is **AGPL-3.0-only**; add the full text as `LICENSE`, set
-   `"license": "AGPL-3.0-only"` in `package.json`, and mention it in the README.
-   This repository does not contain a `LICENSE` file yet, so this is a required
-   decision before an F-Droid submission.
+1. Choose a FOSS license. F-Droid requires one. This repository uses
+   **AGPL-3.0-only**; keep the full text in `LICENSE`, the
+   `"license": "AGPL-3.0-only"` field in `package.json`, and the notice in the
+   README. If you change the license, update the F-Droid metadata as well.
 2. Confirm the version in both places:
    - `app.json` → `expo.version` and `expo.android.versionCode`
    - `android/app/build.gradle` → `versionName` and `versionCode`

@@ -391,3 +391,10 @@ use an EAS preview build; the seeded account and server URL work the same way.
   backup, security notes.
 - [`extension/README.md`](extension/README.md) — install, permissions, layout,
   threat model, limitations.
+
+## License
+
+FlexiVault is licensed under the **GNU Affero General Public License v3.0 only**
+(`AGPL-3.0-only`). See [`LICENSE`](LICENSE). If you run a modified version as a
+network service, the AGPL requires you to offer the corresponding source to
+users of that service.
