@@ -1,0 +1,15 @@
+{
+  "name": "@flexivault/server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hostable, zero-dependency sync server for FlexiVault",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node --experimental-sqlite src/index.js",
+    "dev": "node --watch --experimental-sqlite src/index.js",
+    "test": "node --experimental-sqlite --test test/*.test.js"
+  }
+}

@@ -1,0 +1,38 @@
+node_modules/
+.expo/
+dist/
+npm-debug.*
+.dual-graph/
+.VSCodeCounter/
+build/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
+server/data/
+dist-test/
+.manual-test/
+.env
+.env.local
+
+# Android build artifacts and local signing material
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/keystore.properties
+keystore/
+*.apk
+*.aab
+
+# Editor / OS files
+.idea/
+.vscode/
+*.log
+
+# macOS
+.DS_Store
+
