@@ -13,6 +13,13 @@ data class AutofillFields(
   val packageName: String?,
 )
 
+data class AutofillSaveData(
+  val username: String?,
+  val password: String,
+  val webDomain: String?,
+  val packageName: String?,
+)
+
 object AutofillParser {
   private const val MAX_NODES = 2500
   private val USERNAME_TEXT = Regex("user|email|login|account", RegexOption.IGNORE_CASE)
@@ -72,6 +79,88 @@ object AutofillParser {
       webDomain = webDomain,
       packageName = structure.activityComponent?.packageName,
     )
+  }
+
+  /**
+   * Extracts the submitted credential values from a save request. Save requests
+   * contain the current view hierarchy, not the dataset we filled, so the values
+   * must be read back from the password and username nodes.
+   *
+   * A form with more than one populated password field is usually a
+   * change-password or sign-up form. Saving the first field would store the old
+   * (or new) password under the wrong identity, so those requests are ignored.
+   */
+  fun parseSave(structure: AssistStructure): AutofillSaveData? {
+    val fields = parse(structure) ?: return null
+    val passwordId = fields.passwordId ?: return null
+    var usernameNode: AssistStructure.ViewNode? = null
+    var passwordNode: AssistStructure.ViewNode? = null
+    var populatedPasswordFields = 0
+    var visited = 0
+
+    for (windowIndex in 0 until structure.windowNodeCount) {
+      val queue = ArrayDeque<AssistStructure.ViewNode>()
+      queue.add(structure.getWindowNodeAt(windowIndex).rootViewNode)
+      while (queue.isNotEmpty() && visited < MAX_NODES) {
+        val node = queue.removeFirst()
+        visited += 1
+
+        val id = node.autofillId
+        if (id != null) {
+          if (id == passwordId) passwordNode = node
+          if (id == fields.usernameId) usernameNode = node
+        }
+        if (
+          node.visibility == View.VISIBLE &&
+          node.isEnabled &&
+          isPasswordField(node) &&
+          nodeValue(node, allowTextFallback = false) != null
+        ) {
+          populatedPasswordFields += 1
+        }
+
+        for (childIndex in 0 until node.childCount) {
+          queue.add(node.getChildAt(childIndex))
+        }
+      }
+    }
+
+    if (populatedPasswordFields > 1) return null
+    val password = passwordNode?.let { nodeValue(it, allowTextFallback = false) }
+      ?: passwordNode?.let { nodeValue(it, allowTextFallback = true) }
+      ?: return null
+    if (password.isEmpty() || password.length > 4096) return null
+
+    val username = usernameNode
+      ?.let { nodeValue(it, allowTextFallback = true) }
+      ?.trim()
+      ?.take(500)
+      ?.ifEmpty { null }
+
+    return AutofillSaveData(
+      username = username,
+      password = password,
+      webDomain = fields.webDomain,
+      packageName = fields.packageName,
+    )
+  }
+
+  private fun nodeValue(
+    node: AssistStructure.ViewNode,
+    allowTextFallback: Boolean,
+  ): String? {
+    val value = node.autofillValue
+    if (value != null && value.isText) {
+      val text = value.textValue?.toString()
+      if (!text.isNullOrEmpty()) return text
+    }
+    if (!allowTextFallback) return null
+    val text = node.text?.toString()?.takeIf { it.isNotEmpty() } ?: return null
+    // A masked password field can expose bullets through getText(). Never save
+    // those as the password.
+    return text.takeUnless { candidate ->
+      candidate.all { it == '\u2022' || it == '\u25CF' || it == '*' }
+    }
   }
 
   private fun isButton(node: AssistStructure.ViewNode): Boolean {

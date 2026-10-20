@@ -32,6 +32,7 @@ class AutofillAuthActivity : FragmentActivity() {
     const val EXTRA_LOGIN_NAME = "login_name"
     const val EXTRA_USERNAME_ID = "username_id"
     const val EXTRA_PASSWORD_ID = "password_id"
+    const val EXTRA_WEB_DOMAIN = "web_domain"
 
     fun canAuthenticate(context: Context): Boolean {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -52,6 +53,7 @@ class AutofillAuthActivity : FragmentActivity() {
   private var finished = false
   private var promptSubtitle = "Confirm to fill this login"
   private var loginId: String? = null
+  private var expectedWebDomain: String? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -59,6 +61,9 @@ class AutofillAuthActivity : FragmentActivity() {
     setFinishOnTouchOutside(false)
 
     loginId = intent?.getStringExtra(EXTRA_LOGIN_ID)
+    expectedWebDomain = intent?.getStringExtra(EXTRA_WEB_DOMAIN)
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
     val loginName = intent?.getStringExtra(EXTRA_LOGIN_NAME)
       ?.trim()
       ?.take(80)
@@ -169,11 +174,25 @@ class AutofillAuthActivity : FragmentActivity() {
     // the prompt was open. Do not complete a stale dataset in that case.
     val id = loginId
     val login = try {
-      id?.let { AutofillCache.find(this, it) }
+      id?.let {
+        AutofillPendingStore.apply(this, AutofillCache.read(this))
+          .firstOrNull { login -> login.id == it }
+      }
     } catch (_: Exception) {
       null
     }
     if (login == null) {
+      cancel()
+      return
+    }
+
+    // Re-check the browser target after the device prompt. A sync could have
+    // changed the item's hosts while the prompt was open.
+    val expectedHost = expectedWebDomain
+    if (
+      expectedHost != null &&
+      login.hosts.none { saved -> AutofillMatcher.hostMatches(expectedHost, saved) }
+    ) {
       cancel()
       return
     }

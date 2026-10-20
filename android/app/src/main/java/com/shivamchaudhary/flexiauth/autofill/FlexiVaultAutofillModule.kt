@@ -10,6 +10,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.module.annotations.ReactModule
 
 @ReactModule(name = FlexiVaultAutofillModule.NAME)
@@ -75,6 +76,37 @@ class FlexiVaultAutofillModule(
       promise.resolve(null)
     } catch (exception: Exception) {
       promise.reject("autofill_clear_failed", exception.message, exception)
+    }
+  }
+
+  /**
+   * Returns the Keystore-encrypted credentials confirmed by the save overlay.
+   * The JavaScript vault imports them only while unlocked.
+   */
+  @ReactMethod
+  fun readPendingSaves(promise: Promise) {
+    Thread {
+      try {
+        promise.resolve(AutofillPendingStore.readJson(reactContext))
+      } catch (exception: Exception) {
+        promise.reject("autofill_pending_read_failed", exception.message, exception)
+      }
+    }.start()
+  }
+
+  @ReactMethod
+  fun clearPendingSaves(ids: ReadableArray, promise: Promise) {
+    try {
+      val selected = HashSet<String>()
+      for (index in 0 until ids.size()) {
+        ids.getString(index)?.let { selected.add(it) }
+      }
+      if (selected.isNotEmpty()) {
+        AutofillPendingStore.clear(reactContext, selected)
+      }
+      promise.resolve(null)
+    } catch (exception: Exception) {
+      promise.reject("autofill_pending_clear_failed", exception.message, exception)
     }
   }
 

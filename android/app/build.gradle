@@ -97,8 +97,8 @@ android {
         applicationId 'com.shivamchaudhary.flexiauth'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 3
-        versionName "1.0.2"
+        versionCode 4
+        versionName "1.1.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -168,6 +168,7 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
     // Used by the autofill authentication activity. expo-local-authentication
@@ -178,6 +179,9 @@ dependencies {
     // expo-camera's proprietary ML Kit barcode path with an on-device decoder
     // that has no Google Play services dependency.
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    // Android 14+ Credential Manager provider surface. The provider signs
+    // WebAuthn assertions itself, so it does not depend on Play Services.
+    implementation("androidx.credentials:credentials:1.6.0")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

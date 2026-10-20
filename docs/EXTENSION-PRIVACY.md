@@ -2,9 +2,9 @@
 
 Last updated: 2026-10-20
 
-FlexiVault is a self-hosted password manager. The browser extension is a
-read-only client for a FlexiVault server that you run or choose. The FlexiVault
-project does not operate a hosted service and does not receive your vault data.
+FlexiVault is a self-hosted password manager. The browser extension is a client
+for a FlexiVault server that you run or choose. The FlexiVault project does not
+operate a hosted service and does not receive your vault data.
 
 This policy describes the browser extension. The mobile app and the server are
 covered by the same project and the same principles.
@@ -30,7 +30,14 @@ covered by the same project and the same principles.
   or one-time-code field types needed to match a saved item and fill a form.
   Passwords and TOTP codes are returned to the page only after you explicitly
   choose an item. The content script does not receive secrets while suggestions
-  are being listed.
+  are being listed. After a trusted form submit, it sends the submitted username
+  and password to the background worker only to decide whether to offer a
+  save/update prompt. The pending pair is encrypted with the vault key and kept
+  in memory-backed `chrome.storage.session` for up to five minutes so the prompt
+  can survive a full-page navigation on the same site. It is written to the
+  local cache and synced to your own server as ciphertext only after you choose
+  Save. Dismissing the prompt, saving it, or letting it expire removes the
+  pending record. The pending password is never sent back to the page.
 - **Clipboard.** A password, card number, note or TOTP code is copied only after
   you click Copy.
 
@@ -41,10 +48,11 @@ covered by the same project and the same principles.
 - It does not load remote code, remote fonts or `eval`; all JavaScript is
   packaged with the extension.
 - It does not contact a developer-operated server. Network requests go only to
-  the FlexiVault server URL you configure, and only from the popup/full-page
-  view. The background worker makes no network requests.
-- It does not create accounts. Account creation, item editing, recovery and 2FA
-  setup happen in the mobile app.
+  the FlexiVault server URL you configure, from the popup/full-page view or the
+  background worker's encrypted save/update sync.
+- It does not create accounts. Account creation, editing of cards/notes/identities,
+  recovery and 2FA setup happen in the mobile app. The extension can save or
+  update login credentials after a form submit.
 
 ## Storage and deletion
 
@@ -53,6 +61,10 @@ covered by the same project and the same principles.
   uninstall it.
 - The derived key lives in `chrome.storage.session` and is cleared when the
   browser exits or the vault locks.
+- Pending save/update prompts are encrypted with the vault key in
+  `chrome.storage.session`. They are removed when you save or dismiss them, and
+  are treated as expired and removed on the next access after five minutes. They
+  are never written to `chrome.storage.local` in plaintext.
 - Data stored on your self-hosted server is controlled by you and your server
   operator. The project does not have access to it.
 - Uninstalling the extension removes its local extension storage. It does not

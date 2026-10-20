@@ -18,6 +18,9 @@ export function itemIcon(item: VaultItem): string {
 }
 
 export function itemTypeLabel(item: VaultItem): string {
+  if (item.passkey) {
+    return item.totp?.secret ? "Passkey + 2FA" : "Passkey";
+  }
   switch (item.type) {
     case "card":
       return "Card";
@@ -51,6 +54,7 @@ export function itemSubtitle(item: VaultItem): string {
       return [issuer, label].filter(Boolean).join(" · ") || "Authenticator";
     }
     default: {
+      if (item.passkey && !item.username) return item.passkey.rpId;
       if (item.username) return item.username;
       const host = item.urls?.find((url) => url.trim().length > 0);
       if (host) return host.replace(/^https?:\/\//, "").replace(/\/$/, "");
@@ -74,6 +78,9 @@ function searchableText(item: VaultItem): string {
     item.card?.holder,
     item.identity?.fullName,
     item.identity?.email,
+    item.passkey?.rpId,
+    item.passkey?.userName,
+    item.passkey?.displayName,
     ...(item.urls ?? []),
   ]
     .filter(Boolean)

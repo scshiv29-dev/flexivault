@@ -13,6 +13,7 @@ import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
 
 import com.shivamchaudhary.flexiauth.autofill.FlexiVaultAutofillPackage
 import com.shivamchaudhary.flexiauth.crypto.FlexiVaultCryptoPackage
+import com.shivamchaudhary.flexiauth.passkeys.FlexiVaultPasskeyPackage
 import com.shivamchaudhary.flexiauth.qr.FlexiVaultQrScannerPackage
 
 import expo.modules.ApplicationLifecycleDispatcher
@@ -29,6 +30,7 @@ class MainApplication : Application(), ReactApplication {
           // add(MyReactNativePackage())
           add(FlexiVaultAutofillPackage())
           add(FlexiVaultCryptoPackage())
+          add(FlexiVaultPasskeyPackage())
           add(FlexiVaultQrScannerPackage())
         }
     )

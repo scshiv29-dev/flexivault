@@ -3,4 +3,9 @@
   <color name="iconBackground">#070C0A</color>
   <color name="colorPrimary">#023c69</color>
   <color name="activityBackground">#070C0A</color>
+  <color name="autofill_card">#111916</color>
+  <color name="autofill_field">#1B2722</color>
+  <color name="autofill_text">#F2F6F3</color>
+  <color name="autofill_muted">#9AA8A0</color>
+  <color name="autofill_accent">#3FE0B0</color>
 </resources>

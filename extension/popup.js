@@ -18,9 +18,11 @@ import {
   CONFIG_KEY,
   isSessionFresh,
   local,
+  mergeItems,
   session,
   touchSession,
 } from "./src/store.js";
+import { pushDirtyCache } from "./src/sync.js";
 import { appHtml, vaultListHtml } from "./src/ui.js";
 
 const PULL_ON_OPEN_MS = 15_000;
@@ -34,7 +36,7 @@ const state = {
   view: "loading",
   fullPage,
   config: null,
-  cache: { items: [], revision: 0, lastSyncedAt: 0 },
+  cache: { items: [], revision: 0, lastSyncedAt: 0, dirty: false },
   items: [],
   session: null,
   selectedId: null,
@@ -127,11 +129,14 @@ async function decryptRows(encryptionKey, rows) {
   return Promise.all(rows.map((row) => decryptItem(key, row.data)));
 }
 
-async function saveCache(rows, revision) {
+async function saveCache(rows, revision, options = {}) {
   state.cache = {
     items: rows,
     revision: Number(revision ?? 0),
-    lastSyncedAt: Date.now(),
+    lastSyncedAt: options.keepSyncTime
+      ? Number(state.cache?.lastSyncedAt ?? 0)
+      : Date.now(),
+    dirty: Boolean(options.dirty),
   };
   await local.set({ [CACHE_KEY]: state.cache });
 }
@@ -152,7 +157,12 @@ async function boot() {
   try {
     const stored = await local.get([CONFIG_KEY, CACHE_KEY]);
     state.config = stored[CONFIG_KEY] ?? null;
-    state.cache = stored[CACHE_KEY] ?? { items: [], revision: 0, lastSyncedAt: 0 };
+    state.cache = stored[CACHE_KEY] ?? {
+      items: [],
+      revision: 0,
+      lastSyncedAt: 0,
+      dirty: false,
+    };
 
     if (!state.config) {
       state.view = "setup";
@@ -179,7 +189,10 @@ async function boot() {
       state.items = sortItems(items);
       state.view = "vault";
       render();
-      if (Date.now() - Number(state.cache.lastSyncedAt ?? 0) > PULL_ON_OPEN_MS) {
+      if (
+        state.cache.dirty ||
+        Date.now() - Number(state.cache.lastSyncedAt ?? 0) > PULL_ON_OPEN_MS
+      ) {
         pull({ silent: true });
       }
       return;
@@ -266,6 +279,7 @@ async function doConnect() {
         items: remote.items,
         revision: Number(remote.revision ?? 0),
         lastSyncedAt: Date.now(),
+        dirty: false,
       },
     });
     await session.set(nextSession);
@@ -275,6 +289,7 @@ async function doConnect() {
       items: remote.items,
       revision: Number(remote.revision ?? 0),
       lastSyncedAt: Date.now(),
+      dirty: false,
     };
     state.session = nextSession;
     state.items = sortItems(items);
@@ -291,6 +306,41 @@ async function doConnect() {
     state.error = friendly(error);
     render();
   }
+}
+
+async function loadRemoteForUnlock(config, token, encryptionKey) {
+  let cache = state.cache ?? {
+    items: [],
+    revision: 0,
+    lastSyncedAt: 0,
+    dirty: false,
+  };
+  let pending = Boolean(cache.dirty);
+
+  // An inline save is written locally first. Flush it before replacing the
+  // cache with the remote snapshot so an offline save is not lost.
+  if (pending) {
+    try {
+      const pushed = await pushDirtyCache({
+        config,
+        session: { token },
+        cache,
+      });
+      cache = pushed.cache;
+      pending = false;
+      await saveCache(cache.items, cache.revision, { dirty: false });
+    } catch {
+      // Keep the dirty cache and merge it with the remote snapshot below.
+    }
+  }
+
+  const remote = await api.getVault(config.serverUrl, token);
+  const rows = pending
+    ? mergeItems(cache.items ?? [], remote.items)
+    : remote.items;
+  const items = await decryptRows(encryptionKey, rows);
+  await saveCache(rows, remote.revision, { dirty: pending });
+  return { items, pending };
 }
 
 async function doUnlock() {
@@ -343,9 +393,12 @@ async function doUnlock() {
 
     if (token) {
       try {
-        const remote = await api.getVault(config.serverUrl, token);
-        items = await decryptRows(derived.encryptionKey, remote.items);
-        await saveCache(remote.items, remote.revision);
+        const loaded = await loadRemoteForUnlock(
+          config,
+          token,
+          derived.encryptionKey
+        );
+        items = loaded.items;
         pulled = true;
       } catch (error) {
         if (error instanceof ApiError && error.status === 401) {
@@ -378,17 +431,23 @@ async function doUnlock() {
       token = auth.token;
 
       if (!pulled) {
-        const remote = await api.getVault(config.serverUrl, token);
-        items = await decryptRows(derived.encryptionKey, remote.items);
-        await saveCache(remote.items, remote.revision);
+        const loaded = await loadRemoteForUnlock(
+          config,
+          token,
+          derived.encryptionKey
+        );
+        items = loaded.items;
         pulled = true;
       }
     }
 
     if (!pulled && items.length === 0 && (state.cache.items?.length ?? 0) === 0) {
-      const remote = await api.getVault(config.serverUrl, token);
-      items = await decryptRows(derived.encryptionKey, remote.items);
-      await saveCache(remote.items, remote.revision);
+      const loaded = await loadRemoteForUnlock(
+        config,
+        token,
+        derived.encryptionKey
+      );
+      items = loaded.items;
     }
 
     const nextSession = {
@@ -413,7 +472,10 @@ async function doUnlock() {
     state.form.password = "";
     state.form.totp = "";
     render();
-    toast("Vault unlocked", "success");
+    toast(
+      state.cache.dirty ? "Unlocked. Sync pending." : "Vault unlocked",
+      state.cache.dirty ? "danger" : "success"
+    );
   } catch (error) {
     state.busy = false;
     state.error = friendly(error);
@@ -456,20 +518,52 @@ async function pull(options = {}) {
     }
 
     try {
+      let cache = state.cache ?? {
+        items: [],
+        revision: 0,
+        lastSyncedAt: 0,
+        dirty: false,
+      };
+      let pending = Boolean(cache.dirty);
+
+      // A login saved by the inline prompt is written locally first. Flush it
+      // before pulling so the server revision advances and the new row is not
+      // treated as a remote-only change.
+      if (pending) {
+        try {
+          const pushed = await pushDirtyCache({
+            config: state.config,
+            session: state.session,
+            cache,
+          });
+          cache = pushed.cache;
+          pending = false;
+          await saveCache(cache.items, cache.revision, { dirty: false });
+        } catch {
+          // Keep the dirty cache and merge it with the remote snapshot below.
+        }
+      }
+
       const remote = await api.getVault(
         state.config.serverUrl,
         state.session.token
       );
+      const rows = pending
+        ? mergeItems(cache.items ?? [], remote.items)
+        : remote.items;
       const items = await decryptRows(
         base64ToBytes(state.session.encryptionKeyB64),
-        remote.items
+        rows
       );
 
       state.items = sortItems(items);
-      await saveCache(remote.items, remote.revision);
+      await saveCache(rows, remote.revision, { dirty: pending });
 
       if (!silent) {
-        toast("Vault synced", "success");
+        toast(
+          pending ? "Saved locally — sync pending." : "Vault synced",
+          pending ? "danger" : "success"
+        );
       } else if (state.view === "vault") {
         render();
       }
@@ -686,6 +780,7 @@ async function disconnect() {
 
   await local.remove([CONFIG_KEY, CACHE_KEY]);
   await session.clear();
+  await chrome.storage.session.clear();
 
   state.config = null;
   state.cache = { items: [], revision: 0, lastSyncedAt: 0 };

@@ -68,7 +68,7 @@ reject a version that is not greater than the currently published one.
 1. In the dashboard choose **New item** and upload the zip.
 2. Fill in **Store listing**:
    - **Name:** `FlexiVault`
-   - **Summary:** `Read-only client for your self-hosted, end-to-end encrypted FlexiVault vault. Autofill logins and copy TOTP codes.`
+   - **Summary:** `Self-hosted, end-to-end encrypted vault companion. Autofill, save or update logins and copy TOTP codes.`
    - **Category:** `Productivity`
    - **Language:** `English`
    - **Homepage URL:** `https://github.com/scshiv29-dev/flexivault`
@@ -95,10 +95,11 @@ reject a version that is not greater than the currently published one.
 ### Detailed description copy
 
 ```text
-FlexiVault is a read-only browser companion for a self-hosted, end-to-end
-encrypted password vault. Create and edit items in the FlexiVault mobile app;
-the extension unlocks the same vault in your browser so you can find a login,
-copy a password or TOTP code, and fill a form without switching devices.
+FlexiVault is a browser companion for a self-hosted, end-to-end encrypted
+password vault. Create and edit most items in the FlexiVault mobile app; the
+extension unlocks the same vault in your browser so you can find a login, copy a
+password or TOTP code, fill a form, and save or update a login after a form
+submit without switching devices.
 
 Features:
 - Unlock the vault with your master password in a compact popup or a
@@ -108,6 +109,8 @@ Features:
 - Inline suggestions on matching login fields. The suggestion shows only the
   item name and username; the password is sent to the page only after you
   choose it.
+- Save or update a login from a trusted form submit. The encrypted row is
+  written locally first, then synced to your own server.
 - Live TOTP codes on one-time-code fields, plus a code view with a countdown.
 - Reveal or copy passwords, card data, identities and notes on demand.
 - Host matching rejects look-alike domains, and the extension auto-locks after
@@ -118,7 +121,8 @@ Requirements:
 - A FlexiVault server that you run or choose. This extension does not operate
   or provide a hosted server.
 - A FlexiVault account created in the mobile app, plus the server URL, email
-  and master password. Account creation and item editing stay in the app.
+  and master password. Account creation and editing of cards, notes, identities
+  and TOTP items stay in the app.
 
 Security:
 The master password never leaves the extension's trusted pages. PBKDF2-SHA256
@@ -139,8 +143,8 @@ personal vault or production account. Use a public HTTPS server and disable 2FA
 for that account.
 
 ```text
-FlexiVault is a read-only client for a self-hosted, end-to-end encrypted
-password vault. The reviewer account below contains dummy data only.
+FlexiVault is a client for a self-hosted, end-to-end encrypted password vault.
+The reviewer account below contains dummy data only.
 
 Server URL: https://demo.example.com
 Email: chrome-review@example.com
@@ -157,8 +161,9 @@ Test steps:
 5. Open the TOTP item in the popup and use Copy to verify clipboard access.
 
 The demo vault contains no real credentials. The extension makes network
-requests only to the server URL above, and only from the popup/full-page view.
-The background worker makes no network requests.
+requests only to the server URL above, and only from the popup/full-page view or
+the background worker's encrypted save/update sync. It does not contact any
+other host.
 ```
 
 Before submitting, test those exact steps from a clean Chrome profile with the
@@ -169,10 +174,10 @@ will reject the item as non-functional.
 
 **Single purpose**
 
-> FlexiVault is a read-only client for a user's self-hosted, end-to-end
-> encrypted password vault. It unlocks the vault, lists saved items, copies
-> credentials or TOTP codes on request, and fills saved login forms on matching
-> websites.
+> FlexiVault is a client for a user's self-hosted, end-to-end encrypted password
+> vault. It unlocks the vault, lists saved items, copies credentials or TOTP
+> codes on request, fills saved login forms on matching websites, and can offer
+> to save or update a login after a trusted form submit.
 
 **Permission justifications**
 
@@ -182,7 +187,7 @@ will reject the item as non-functional.
 | `activeTab` | Reads the active tab's URL for the user-initiated popup autofill and opens the content-script connection after the user clicks a suggestion. |
 | `scripting` | Injects the packaged content script into a tab that was already open before the extension was installed or reloaded, only after the user clicks Autofill. |
 | `clipboardWrite` | Copies a password, card number, note or TOTP code only after the user clicks Copy. |
-| `http://*/*`, `https://*/*` | The content script must detect login and one-time-code fields on any site where the user has saved an item. It reads only the fields it may fill, shows suggestions in an isolated shadow root, and sends only the field kind to the background worker. The background worker makes no network requests; sync and sign-in happen only in the popup. |
+| `http://*/*`, `https://*/*` | The content script must detect login and one-time-code fields on any site where the user has saved an item. It reads only the fields it may fill or a submitted login it can offer to save, shows suggestions in an isolated shadow root, and sends the field kind or captured credential to the background worker. The background worker makes network requests only to the configured FlexiVault server, for sync and encrypted save/update. |
 
 **Remote code**
 
@@ -203,12 +208,19 @@ advertising:
 - **Financial and payment information** — saved card numbers and CVVs are
   decrypted only when the user opens or copies a card item. The developer does
   not receive them.
-- **Website content** — the active hostname and the login/OTP field types used
-  to match and fill a form. A password or code is sent to the page only after
-  the user selects an item.
+- **Website content** — the active hostname, the login/OTP field types used to
+  match and fill a form, and the submitted username/password after a trusted form
+  submit. The submitted pair is sent to the background worker to decide whether
+  to offer a save/update prompt, then kept encrypted with the vault key in
+  memory-backed session storage so it can survive a full-page navigation on the
+  same site until the user saves, dismisses, or it expires. A password or code is
+  sent to the page only after the user selects an item. A saved credential is
+  encrypted with the vault key before it is written locally or sent to the
+  user's own server.
 
 The extension does not build a browsing history. It reads the active tab URL
-only for a user-initiated fill and does not send it to the developer.
+only for a fill or to bind a save prompt to the current hostname, and does not
+send it to the developer.
 
 Answer **No** to selling data, transferring data for purposes unrelated to the
 single purpose, and using data for creditworthiness or lending. Explain that
@@ -217,9 +229,9 @@ the only network destination is the server URL the user enters.
 **Data retention**
 
 > The user can choose Disconnect in the popup to remove the cached vault,
-> session token and server configuration. Uninstalling the extension removes
-> its `chrome.storage` data. Data stored on the self-hosted server is controlled
-> by the user.
+> session token, pending save prompts and server configuration. Uninstalling the
+> extension removes its `chrome.storage` data. Data stored on the self-hosted
+> server is controlled by the user.
 
 ## 3. Microsoft Edge Add-ons
 

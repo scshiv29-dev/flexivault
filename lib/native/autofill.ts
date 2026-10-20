@@ -1,6 +1,10 @@
 import { NativeModules, Platform } from "react-native";
 
 import { buildAutofillPayload } from "@/lib/vault/autofill";
+import {
+  parsePendingAutofillSaves,
+  type PendingAutofillSave,
+} from "@/lib/vault/autofill-save";
 import type { VaultItem } from "@/lib/vault/types";
 
 interface NativeAutofillModule {
@@ -9,6 +13,8 @@ interface NativeAutofillModule {
   configure(payload: string): Promise<void>;
   clear(): Promise<void>;
   openSettings(): Promise<void>;
+  readPendingSaves(): Promise<string>;
+  clearPendingSaves(ids: string[]): Promise<void>;
 }
 
 const nativeModule: NativeAutofillModule | undefined =
@@ -49,6 +55,21 @@ export async function configureAutofill(items: VaultItem[]): Promise<void> {
 export async function clearAutofillCache(): Promise<void> {
   if (!nativeModule) return;
   await nativeModule.clear();
+}
+
+export async function readPendingAutofillSaves(): Promise<PendingAutofillSave[]> {
+  if (!nativeModule) return [];
+  try {
+    const json = await nativeModule.readPendingSaves();
+    return parsePendingAutofillSaves(json);
+  } catch {
+    return [];
+  }
+}
+
+export async function clearPendingAutofillSaves(ids: string[]): Promise<void> {
+  if (!nativeModule || ids.length === 0) return;
+  await nativeModule.clearPendingSaves(ids);
 }
 
 export async function openAutofillSettings(): Promise<void> {

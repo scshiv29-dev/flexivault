@@ -29,6 +29,31 @@ export interface IdentityDetails {
   passport?: string;
 }
 
+/**
+ * A synced P-256 passkey. The private key is encrypted with the vault key when
+ * the item is persisted; the native Android provider keeps a Keystore-encrypted
+ * mirror so assertions can be signed while the React Native app is locked.
+ */
+export interface PasskeyRecord {
+  /** Unpadded base64url credential ID. */
+  credentialId: string;
+  /** Relying Party ID, e.g. example.com. */
+  rpId: string;
+  /** Unpadded base64url WebAuthn user handle. */
+  userHandle: string;
+  userName: string;
+  displayName: string;
+  /** Unpadded base64url 32-byte P-256 private scalar. */
+  privateKey: string;
+  /** Unpadded base64url 32-byte P-256 public key coordinate. */
+  publicKeyX: string;
+  /** Unpadded base64url 32-byte P-256 public key coordinate. */
+  publicKeyY: string;
+  createdAt: number;
+  lastUsedAt?: number;
+  signCount?: number;
+}
+
 export interface VaultItem {
   id: string;
   type: VaultItemType;
@@ -42,6 +67,7 @@ export interface VaultItem {
   totp?: TotpConfig | null;
   card?: CardDetails;
   identity?: IdentityDetails;
+  passkey?: PasskeyRecord;
   folder?: string;
   favorite?: boolean;
   createdAt: number;

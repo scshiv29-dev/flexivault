@@ -23,6 +23,10 @@ function area() {
     async set(next) {
       values = { ...values, ...next };
     },
+    async remove(keys) {
+      const list = Array.isArray(keys) ? keys : [keys];
+      for (const key of list) delete values[key];
+    },
     async clear() {
       values = {};
     },
@@ -284,6 +288,76 @@ assert.ok(
   Number(touched.lastActiveAt) >= now,
   "a successful fill extends the session activity window"
 );
+
+let promptResponse = await request({
+  type: "flexivault:save-prompt",
+  username: "ada@example.com",
+  password: "new-secret",
+  name: "Acme Portal",
+});
+assert.equal(promptResponse.pending, true, "a changed password creates a pending save");
+assert.equal(promptResponse.action, "update");
+
+let pendingResponse = await request({ type: "flexivault:pending-save" });
+assert.equal(pendingResponse.ok, true);
+assert.equal(pendingResponse.prompt.action, "update");
+assert.equal(pendingResponse.prompt.name, "Acme Portal");
+assert.equal(pendingResponse.prompt.host, "acme.test");
+const pendingPromptId = pendingResponse.prompt.id;
+assert.ok(pendingPromptId, "the prompt carries a one-time id");
+assert.ok(
+  !Object.hasOwn(pendingResponse.prompt, "password"),
+  "the pending prompt never returns the password to the page"
+);
+
+const lookalikePending = await request(
+  { type: "flexivault:pending-save" },
+  {
+    url: "https://acme.test.evil.com/login",
+    tab: { id: 1, url: "https://acme.test.evil.com/login" },
+  }
+);
+assert.equal(lookalikePending.prompt, null, "a look-alike host cannot see the prompt");
+
+const subdomainSender = {
+  url: "https://login.acme.test/welcome",
+  tab: { id: 1, url: "https://login.acme.test/welcome" },
+};
+pendingResponse = await request(
+  { type: "flexivault:pending-save" },
+  subdomainSender
+);
+assert.equal(pendingResponse.prompt?.id, pendingPromptId);
+assert.equal(pendingResponse.prompt?.host, "acme.test");
+
+const wrongPrompt = await request({
+  type: "flexivault:save",
+  promptId: "wrong-prompt",
+});
+assert.equal(wrongPrompt.ok, false, "a stale prompt id cannot save");
+
+const saved = await request(
+  {
+    type: "flexivault:save",
+    promptId: pendingPromptId,
+  },
+  subdomainSender
+);
+assert.equal(saved.ok, true);
+assert.equal(saved.action, "update");
+assert.equal(saved.id, "item_acme");
+assert.equal(saved.synced, false, "the row is kept locally when sync is unavailable");
+
+pendingResponse = await request({ type: "flexivault:pending-save" });
+assert.equal(pendingResponse.prompt, null, "saving clears the pending prompt");
+
+const updatedFill = await request({
+  type: "flexivault:suggest-fill",
+  kind: "login",
+  id: "item_acme",
+});
+assert.equal(updatedFill.ok, true);
+assert.equal(updatedFill.password, "new-secret", "the updated password fills immediately");
 
 sessionArea.clear();
 await sessionArea.set({

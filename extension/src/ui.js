@@ -507,7 +507,7 @@ function settingsBody(state) {
     <div class="hero">
       <p class="eyebrow">Preferences</p>
       <h1 class="display">Settings</h1>
-      <p class="muted">This extension is a read-only window into your synced vault.</p>
+      <p class="muted">This extension is a window into your synced vault. Logins can be saved here; other item types are edited on mobile.</p>
     </div>
 
     ${errorCallout(state)}
@@ -592,8 +592,9 @@ function settingsBody(state) {
     </div>
 
     <div class="callout info" style="margin-top:12px">
-      <div><strong>Read-only by design.</strong>Create and edit items in the mobile app.
-      The extension focuses on unlock, copy and autofill.</div>
+      <div><strong>Autofill and save in the browser.</strong>Create cards, notes,
+      identities and TOTP items in the mobile app. FlexiVault offers to save or
+      update a login after a trusted form submit.</div>
     </div>
 
     <div class="section-label">Connection</div>
@@ -609,7 +610,7 @@ function settingsBody(state) {
     </div>
 
     <p class="tiny center" style="margin-top:18px">
-      FlexiVault extension · v1.0.0 · keys stay with you
+      FlexiVault extension · v${globalThis.chrome?.runtime?.getManifest?.().version ?? "1.1.0"} · keys stay with you
     </p>
   </main>`;
 }

@@ -1,9 +1,10 @@
-# System autofill on mobile
+# System autofill and passkeys on mobile
 
 Status: **Android implemented; device verification pending.** The Android app
-registers a native `AutofillService`, keeps a login-only encrypted cache and
-requires a biometric or device-credential check for every fill. iOS autofill is
-not implemented.
+registers a native `AutofillService` and an Android 14+ `CredentialProviderService`,
+keeps login-only encrypted caches and requires a biometric or device-credential
+check for every fill and every passkey assertion. Save/update prompts are
+implemented. iOS autofill and iOS passkeys are not implemented.
 
 Expo Go cannot exercise this feature. It needs a native APK built from
 `android/` (for example `npx expo run:android` or a Gradle build).
@@ -33,6 +34,17 @@ Expo Go cannot exercise this feature. It needs a native APK built from
   disabled, the vault is reset, the cache is corrupted, or after 30 days.
 - Settings shows whether the service is selected and opens the Android autofill
   settings screen.
+- Login submissions can show a translucent **Save login** / **Update login**
+  prompt over the app being filled. Saving or updating never opens FlexiVault.
+  If the vault is locked, the credential is queued in a Keystore-encrypted store
+  and imported on the next unlock or foreground.
+- On Android 14 (API 34) and newer, FlexiVault can also act as a passkey
+  provider. It can create and assert synced P-256 passkeys in supported apps and
+  privileged browsers, gated by the same biometric or device-credential check.
+  Passkeys are stored as encrypted vault items and mirrored into a
+  Keystore-encrypted native store so the provider works while the app is locked.
+- Settings shows a passkey setup row on Android 14+ and opens Android's
+  credential-provider settings screen.
 
 Chrome may also show its built-in password manager. Modern Chrome builds only
 route web forms to third-party autofill services after you opt in: **Chrome →
@@ -45,14 +57,28 @@ manager or use Android's autofill picker.
 
 Current limitations:
 
-- Only login items are offered. Cards and identities can be stored in the vault
-  but are not filled; passkeys and save/update prompts are not implemented.
+- Only login items are offered for autofill. Cards and identities can be stored
+  in the vault but are not filled.
+- Save/update prompts capture a submitted username/password pair. They queue it
+  in a Keystore-encrypted store; after the vault is unlocked, the app merges it
+  into the matching item, marks it dirty, and syncs. They cannot detect every
+  custom web component or native form.
+- Passkeys require Android 14 (API 34) or newer and the user selecting FlexiVault
+  as a credential provider. OEM builds may hide or omit third-party provider
+  support.
+- Browser passkeys rely on the browser being on Google's privileged-app
+  allowlist so FlexiVault can resolve the website origin. Chrome and Edge are the
+  supported targets; Firefox is not supported.
+- Passkeys are software keys with `fmt: "none"` attestation and backup-eligible
+  flags. Relying parties that require hardware attestation or a non-zero
+  signature counter will reject them.
 - Only the first detected username/password pair in a form is filled. On an
   email-first sign-in page, a dataset can fill the username even though no
   password field is present yet; the password step needs a second fill.
-- The service needs Android 8.0 (API 26) or newer.
-- A native build is required; the feature is unavailable in Expo Go.
+- The autofill service needs Android 8.0 (API 26) or newer. Passkeys need API 34.
+- A native build is required; these features are unavailable in Expo Go.
 - iOS needs a separate AutoFill Credential Provider extension and Apple signing.
+  iOS passkeys are out of scope for this implementation.
 
 ## Architecture
 
@@ -75,6 +101,39 @@ AutofillAuthActivity ── BiometricPrompt / Keyguard
   │  RESULT_OK + EXTRA_AUTHENTICATION_RESULT (populated Dataset)
   ▼
 Android fills the target fields
+```
+
+Save/update adds a second, optional path:
+
+```text
+FlexiVaultAutofillService
+  │  SaveInfo + onSaveRequest
+  ▼
+AutofillSaveActivity (translucent over the target app)
+  │  Save / Update / Not now
+  ▼
+AutofillPendingStore ── AES-256-GCM ── Android Keystore key
+  │  stable item id + encrypted pending credential
+  ▼
+JS import on unlock/foreground
+  │  merge into the encrypted vault, mark dirty, sync
+  ▼
+Pending rows are also overlaid on the autofill cache
+```
+
+Android 14+ passkeys use a separate provider surface:
+
+```text
+Browser / native app
+  │  Credential Manager
+  ▼
+FlexiVaultCredentialProviderService
+  │  create entry or matching passkey entries
+  ▼
+PasskeyActivity ── BiometricPrompt / Keyguard
+  │  ES256 signature or fmt:"none" attestation
+  ▼
+PasskeyStore (Keystore AES-GCM mirror) + VaultItem.passkey
 ```
 
 ### Cache lifecycle
@@ -134,6 +193,153 @@ dataset values are built by the service before the prompt. The authentication
 gate above is the security boundary; the cache is encrypted at rest and every
 fill requires a device authentication prompt.
 
+### Save and update prompts
+
+The service attaches `SaveInfo` when it detects a login form it can capture. On
+commit, `onSaveRequest()` reads the submitted username/password pair, works out
+whether an existing login matches the package or web host and username, and
+launches `AutofillSaveActivity` as a translucent overlay.
+
+The overlay:
+
+- uses an empty task affinity, `excludeFromRecents` and `noHistory`, so it does
+  not pull FlexiVault's main task forward;
+- sets `FLAG_SECURE`, so the captured credential is not screenshotted;
+- offers **Save** for a new login, **Update** for an existing one, and **Not
+  now**;
+- hands an accepted credential to a running JS session through a short-lived
+  in-process handoff, and writes the durable copy to
+  `AutofillPendingStore` in every case.
+
+`AutofillPendingStore` is encrypted with AES-256-GCM under the same Android
+Keystore pattern as the autofill cache, with alias `flexivault.autofill.pending.v1`.
+It is the source of truth for the next import. Pending rows are overlaid on the
+autofill cache so a just-saved login can be offered for a subsequent fill before
+the React Native app next imports it.
+
+On unlock and foreground, the JS provider imports the queue. Stable item IDs
+make retries idempotent. An update replaces only the credential fields; notes,
+folder, favorite flag and TOTP seed are preserved. The vault row is marked dirty
+and scheduled for encrypted sync, then the queue entry is cleared. A failed
+import leaves the queue intact for the next attempt.
+
+### Android passkeys
+
+The passkey provider requires Android 14 (API 34) and
+`androidx.credentials:credentials:1.6.0`. The manifest declares
+`FlexiVaultCredentialProviderService` with
+`android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE`,
+`res/xml/credential_provider.xml`, and the
+`androidx.credentials.TYPE_PUBLIC_KEY_CREDENTIAL` capability. The service and
+activity are disabled below API 34 through a `values-v34` boolean.
+
+Creation:
+
+1. `onBeginCreateCredentialRequest()` validates the WebAuthn creation options,
+   accepts only ES256 (`alg: -7`), honors `excludeCredentials`, and returns one
+   `CreateEntry`.
+2. `PasskeyActivity` generates a fresh P-256 key pair and a 32-byte credential ID.
+3. It writes the credential to `PasskeyStore` with `pending = true`.
+4. It returns `fmt: "none"` attestation with an empty `attStmt`.
+
+Assertion:
+
+1. `onBeginGetCredentialRequest()` parses each request's `rpId` and
+   `allowCredentials`, reads the native store, and returns a
+   `PublicKeyCredentialEntry` for each matching credential.
+2. The selected entry launches `PasskeyActivity`, which rechecks that the
+   credential still belongs to the requested RP and is allowed by the request.
+3. After device authentication it signs
+   `authenticatorData || clientDataHash` for browser calls, or
+   `authenticatorData || SHA256(clientDataJSON)` for native calls.
+4. It returns the DER-encoded ES256 signature and the stored user handle.
+
+Both flows use these WebAuthn details:
+
+- `rpIdHash = SHA256(rpId)`;
+- registration flags `0x5D` (`UP | UV | BE | BS | AT`), assertion flags `0x1D`
+  (`UP | UV | BE | BS`);
+- a four-byte zero signature counter, because the credential is synced and
+  backup-eligible;
+- a COSE ES256 key with integer labels (`1: 2`, `3: -7`, `-1: 1`, `-2: x`,
+  `-3: y`);
+- unpadded base64url for every WebAuthn identifier and signature;
+- `clientExtensionResults: {}`.
+
+Every create and every assertion is gated by `PasskeyActivity`. It uses
+`BiometricPrompt` with `BIOMETRIC_STRONG | DEVICE_CREDENTIAL` when available and
+falls back to `KeyguardManager.createConfirmDeviceCredentialIntent`. It sets
+`FLAG_SECURE`, uses an empty task affinity, and returns Credential Manager
+cancellation or unknown exceptions instead of a half-built response. Listing
+entries while the vault is locked is allowed; signing is not.
+
+### Passkey storage and sync
+
+A passkey is stored on the normal login row:
+
+```ts
+interface PasskeyRecord {
+  credentialId: string; // base64url
+  rpId: string;
+  userHandle: string; // base64url
+  userName: string;
+  displayName: string;
+  privateKey: string; // base64url P-256 scalar
+  publicKeyX: string;
+  publicKeyY: string;
+  createdAt: number;
+  lastUsedAt?: number;
+  signCount?: number;
+}
+```
+
+`VaultItem.passkey` is encrypted with the rest of the item by the vault master
+key, so it syncs end-to-end encrypted and is included in encrypted backups. The
+native `PasskeyStore` is a Keystore-encrypted mirror at
+`flexivault.passkey.v1`, stored in `SharedPreferences` as
+`base64(iv):base64(ciphertext)`.
+
+On unlock and foreground:
+
+1. `readPendingPasskeys()` imports native pending creates into the vault.
+2. The vault row is marked dirty and scheduled for sync.
+3. `clearPendingPasskeys()` clears the native pending flag.
+4. `syncNativePasskeys()` mirrors all live vault passkeys into the native store.
+
+The mirror uses vault tombstones: `deletedVaultItemIds` removes a passkey that
+was deleted on another device. `resetVault()` clears the native store. An empty
+local cache before the first server pull does not delete native entries; only a
+tombstone does. This matters because the provider must remain usable while the
+React Native app is locked or has not finished its first sync.
+
+The native store key is not bound to a `CryptoObject`; the provider must read
+entries before it can show the device-auth prompt. As with autofill, the device
+authentication in `PasskeyActivity` is the signing boundary, and the private
+scalar is encrypted at rest in both the vault and the native store.
+
+### Browser origins and the privileged-app allowlist
+
+For browser calls, Credential Manager supplies a `clientDataHash` and, for
+privileged browsers, resolves the website origin through
+`CallingAppInfo.getOrigin()`. FlexiVault bundles Google's privileged-app
+allowlist snapshot at
+`android/app/src/main/assets/passkey_privileged_apps.json`, sourced from
+`https://www.gstatic.com/gpm-passkeys-privileged-apps/apps.json`.
+
+When `clientDataHash` is present, FlexiVault signs that hash and returns an empty
+`clientDataJSON` placeholder. Credential Manager fills in the browser's original
+client data. This avoids reconstructing browser-specific client data and is the
+contract documented by AndroidX.
+
+For native app calls there is no `clientDataHash`. FlexiVault builds
+`clientDataJSON` itself and uses
+`android:apk-key-hash:<base64url(SHA256(signing certificate))>` as the origin.
+
+Chrome and Edge are the supported browser targets. A browser that is not on the
+allowlist may not resolve a website origin; its requests can be rejected by the
+RP even if the provider is selectable. The allowlist is a build-time snapshot and
+must be refreshed when a browser's signing certificate or package entry changes.
+
 ### Matching rules
 
 - Only `login` items with a non-empty password and a non-empty name are cached.
@@ -178,20 +384,42 @@ The underlying module is `NativeModules.FlexiVaultAutofill`. It is registered in
 `MainApplication.kt` and implemented in
 `android/app/src/main/java/com/shivamchaudhary/flexiauth/autofill/`.
 
+`lib/native/passkeys.ts` exposes:
+
+```ts
+isPasskeyProviderAvailable(): Promise<boolean>;
+isPasskeyProviderEnabled(): Promise<boolean>;
+readPendingPasskeys(): Promise<PendingPasskey[]>;
+clearPendingPasskeys(credentialIds: string[]): Promise<void>;
+syncNativePasskeys(items: VaultItem[]): Promise<void>;
+clearNativePasskeys(): Promise<void>;
+openPasskeySettings(): Promise<void>;
+```
+
+The native module is `NativeModules.FlexiVaultPasskeys`, implemented in
+`android/app/src/main/java/com/shivamchaudhary/flexiauth/passkeys/`.
+`PasskeyCryptoTest` covers base64url, CBOR/COSE layout, auth-data flags, the
+four-byte counter, request parsing and ES256 signature verification.
+
 `buildAutofillPayload()` in `lib/vault/autofill.ts` is unit-tested to ensure that
 notes, TOTP secrets, cards and identities never enter the payload.
 
 ### Data model
 
-`VaultItem` has an optional field:
+`VaultItem` has two optional fields:
 
 ```ts
 androidPackages?: string[];
+passkey?: PasskeyRecord;
 ```
 
 The editor accepts up to 20 valid Android package names. A package name must look
 like `com.example.app`; invalid entries are ignored rather than matching nothing
 silently at fill time.
+
+A passkey-only login has no password. It still has a name, username, website and
+`passkey` record, and is labelled **Passkey** in the vault. Editing it preserves
+the passkey; deleting the item syncs a tombstone that removes the native mirror.
 
 ## Testing
 
@@ -223,12 +451,35 @@ On a physical Android 8+ device (or an emulator with a secure lock screen):
 11. On an email-first page such as Google's sign-in, focus only the email field.
     A username-only suggestion should fill the email. Continue to the password
     step and fill again.
+12. Save prompt: submit a login form with a new username/password pair. The
+    translucent save overlay should appear over the target app, not switch to
+    FlexiVault. Choose **Save**, then repeat the form; the saved login should be
+    offered. Lock the vault, submit another new login, choose **Save**, unlock
+    FlexiVault, and confirm the queued credential is imported and the pending
+    queue is empty.
+13. Update prompt: submit a changed password for an existing login. Choose
+    **Update**; the vault row should keep its notes, folder, favorite flag and
+    TOTP seed, and its password should change.
+14. Passkeys require an Android 14+ device. Open **Settings → Security →
+    Android passkeys**, select FlexiVault, then create a passkey on a test
+    relying party in Chrome. The device-auth prompt should appear over Chrome.
+    Confirm that a **Passkey** login appears in the vault, lock FlexiVault, sign
+    out, and sign in with the passkey. The prompt should still appear and the
+    assertion should succeed while the app is locked.
+15. Reboot without opening FlexiVault and repeat the passkey assertion. Cancel
+    the prompt once and confirm the RP receives a cancellation, not a signature.
+16. Delete the passkey item. After sync, Android should no longer offer that
+    credential. On a second device, delete the same passkey and confirm the
+    tombstone removes its native mirror too.
+17. Use `adb logcat` only for high-level errors. Do not log passwords, private
+    passkey scalars, `clientDataHash`, or assertion signatures.
 
 Useful checks:
 
 ```bash
 adb shell settings get secure autofill_service
 adb shell dumpsys autofill
+adb shell dumpsys credential
 ```
 
 Do not log passwords from the service or the native module.

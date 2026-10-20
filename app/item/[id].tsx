@@ -239,6 +239,48 @@ export default function ItemDetailScreen() {
         </>
       ) : null}
 
+      {item.passkey ? (
+        <>
+          <SectionHeader title="Passkey" />
+          <Card style={{ paddingVertical: 2 }}>
+            <InfoRow
+              icon="key"
+              label="Relying party"
+              value={item.passkey.rpId}
+            />
+            <Divider style={{ marginLeft: 52 }} />
+            <InfoRow
+              icon="shield"
+              label="Credential ID"
+              value={lastFour(item.passkey.credentialId)}
+              mono
+            />
+            <Divider style={{ marginLeft: 52 }} />
+            <InfoRow
+              icon="clock"
+              label="Created"
+              value={formatDate(item.passkey.createdAt)}
+            />
+            {item.passkey.lastUsedAt ? (
+              <>
+                <Divider style={{ marginLeft: 52 }} />
+                <InfoRow
+                  icon="activity"
+                  label="Last used"
+                  value={formatDate(item.passkey.lastUsedAt)}
+                />
+              </>
+            ) : null}
+          </Card>
+          <Callout
+            tone="info"
+            title="Sign in with a passkey"
+            body="Android offers this passkey in apps and privileged browsers. FlexiVault asks for your fingerprint, face, or screen lock before signing."
+            style={{ marginTop: 10 }}
+          />
+        </>
+      ) : null}
+
       {item.totp?.secret ? (
         <View style={{ marginTop: 20 }}>
           <TotpCard item={item} onOpen={() => router.push(`/item/edit?id=${item.id}`)} />

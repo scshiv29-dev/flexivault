@@ -11,12 +11,14 @@
     globalThis.__flexivaultContentInstance === CONTENT_INSTANCE;
 
 const SUGGEST_HOST_ID = "flexivault-suggest-host";
+const SAVE_HOST_ID = "flexivault-save-host";
 const SUGGEST_DELAY_MS = 80;
 const SUGGEST_MARGIN = 8;
 
 // An earlier instance may have left an open suggestion panel behind. Remove it
 // so the superseding instance starts from a clean DOM.
 document.getElementById(SUGGEST_HOST_ID)?.remove();
+document.getElementById(SAVE_HOST_ID)?.remove();
 
 const PALETTES = [
   ["#DDF6EC", "#0B8563"],
@@ -695,6 +697,247 @@ function closePanel() {
   panel = null;
 }
 
+/* ----------------------------- save prompt ------------------------------- */
+
+const SAVE_CSS = `
+  :host { all: initial; }
+  .card {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    box-sizing: border-box;
+    width: 336px;
+    max-width: calc(100vw - 24px);
+    padding: 16px;
+    background: #0f1714;
+    border: 1px solid #2c3d36;
+    border-radius: 16px;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+    color: #ecf5f0;
+    font: 13px/1.45 "Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+    z-index: 2147483647;
+  }
+  .head { display: flex; align-items: center; gap: 8px; }
+  .mark {
+    width: 16px; height: 16px; border-radius: 5px;
+    background: #3fe0b0; box-shadow: inset 0 0 0 4px #03231a;
+  }
+  .title { font-size: 14px; font-weight: 700; }
+  .sub { margin-top: 6px; color: #9db0a7; font-size: 12px; }
+  .sub strong { color: #ecf5f0; font-weight: 600; }
+  .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  button {
+    appearance: none; border: 0; border-radius: 9px; padding: 8px 12px;
+    font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .ghost { background: transparent; color: #9db0a7; }
+  .primary { background: #3fe0b0; color: #04231a; }
+  .status { margin-top: 10px; color: #9db0a7; font-size: 11.5px; }
+  .status.error { color: #ff9a9a; }
+`;
+
+let saveHost = null;
+let saveCloseTimer = null;
+let lastSaveSignature = "";
+let lastSaveAt = 0;
+
+function closeSavePrompt() {
+  if (saveCloseTimer) {
+    clearTimeout(saveCloseTimer);
+    saveCloseTimer = null;
+  }
+  if (saveHost?.isConnected) saveHost.remove();
+  saveHost = null;
+}
+
+function renderSavePrompt(action, name, host, promptId) {
+  closeSavePrompt();
+  closePanel();
+
+  saveHost = document.createElement("div");
+  saveHost.id = SAVE_HOST_ID;
+  saveHost.style.cssText =
+    "all: initial; position: fixed; inset: 0; width: 0; height: 0; z-index: 2147483647;";
+  const root = saveHost.attachShadow({ mode: "closed" });
+  const style = document.createElement("style");
+  style.textContent = SAVE_CSS;
+
+  const card = document.createElement("section");
+  card.className = "card";
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-label", action === "update" ? "Update login" : "Save login");
+
+  const head = document.createElement("div");
+  head.className = "head";
+  const mark = document.createElement("span");
+  mark.className = "mark";
+  const title = document.createElement("span");
+  title.className = "title";
+  title.textContent = action === "update" ? "Update password?" : "Save password?";
+  head.append(mark, title);
+
+  const sub = document.createElement("div");
+  sub.className = "sub";
+  const label = document.createElement("strong");
+  label.textContent = name || host;
+  sub.append(label, document.createTextNode(
+    action === "update"
+      ? " — replace the saved password for this site."
+      : " — add this login to FlexiVault."
+  ));
+
+  const status = document.createElement("div");
+  status.className = "status";
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "ghost";
+  dismiss.textContent = "Not now";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "primary";
+  save.textContent = action === "update" ? "Update" : "Save";
+  actions.append(dismiss, save);
+
+  dismiss.addEventListener("click", () => {
+    void chrome.runtime
+      .sendMessage({ type: "flexivault:dismiss-save", promptId })
+      .catch(() => {});
+    closeSavePrompt();
+  });
+  save.addEventListener("click", async () => {
+    dismiss.disabled = true;
+    save.disabled = true;
+    save.textContent = "Saving…";
+    status.textContent = "";
+    status.className = "status";
+
+    let response;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: "flexivault:save",
+        promptId,
+      });
+    } catch {
+      response = { ok: false, error: "FlexiVault is not available." };
+    }
+    if (!isActiveInstance()) return;
+
+    if (!response?.ok) {
+      status.textContent = response?.error || "Could not save this login.";
+      status.className = "status error";
+      dismiss.disabled = false;
+      dismiss.textContent = "Close";
+      save.hidden = true;
+      return;
+    }
+
+    status.textContent = response.synced
+      ? "Saved and synced."
+      : "Saved locally — it will sync when the vault reconnects.";
+    status.className = "status";
+    save.hidden = true;
+    dismiss.disabled = false;
+    dismiss.textContent = "Done";
+    saveCloseTimer = setTimeout(closeSavePrompt, 2600);
+  });
+
+  card.append(head, sub, status, actions);
+  root.append(style, card);
+  document.documentElement.appendChild(saveHost);
+}
+
+async function showPendingSave() {
+  if (!isActiveInstance()) return;
+  if (typeof chrome === "undefined" || typeof chrome.runtime?.sendMessage !== "function") {
+    return;
+  }
+  let response;
+  try {
+    response = await chrome.runtime.sendMessage({
+      type: "flexivault:pending-save",
+    });
+  } catch {
+    return;
+  }
+  if (!isActiveInstance()) return;
+  const prompt = response?.prompt;
+  if (!response?.ok || !prompt?.id) return;
+  if (prompt.action !== "create" && prompt.action !== "update") return;
+  renderSavePrompt(
+    prompt.action,
+    prompt.name || location.hostname,
+    prompt.host || location.hostname,
+    prompt.id
+  );
+}
+
+async function offerSave(passwordField) {
+  if (!isActiveInstance() || !passwordField?.isConnected) return;
+  if (typeof chrome === "undefined" || typeof chrome.runtime?.sendMessage !== "function") {
+    return;
+  }
+
+  const form = closestComposed(passwordField, "form");
+  const fields = form
+    ? existingPasswordFields(form)
+    : existingPasswordFields(document);
+  if (fields.length !== 1) return;
+
+  const password = passwordField.value;
+  if (!password) return;
+  const usernameField = findUsernameField(passwordField);
+  const username = usernameField?.value ?? "";
+  const signature = `${location.host}\u0000${username}\u0000${password}`;
+  if (signature === lastSaveSignature && Date.now() - lastSaveAt < 5000) return;
+  lastSaveSignature = signature;
+  lastSaveAt = Date.now();
+  closeSavePrompt();
+
+  let response;
+  try {
+    response = await chrome.runtime.sendMessage({
+      type: "flexivault:save-prompt",
+      username,
+      password,
+      name: document.title,
+    });
+  } catch {
+    return;
+  }
+  if (!isActiveInstance()) return;
+  if (!response?.ok || !response.pending) return;
+  await showPendingSave();
+}
+
+const boundForms = new WeakSet();
+
+function bindSaveForm(form) {
+  if (!(form instanceof HTMLFormElement) || boundForms.has(form)) return;
+  boundForms.add(form);
+  form.addEventListener(
+    "submit",
+    (event) => {
+      if (!isActiveInstance() || !event.isTrusted) return;
+      const fields = existingPasswordFields(form);
+      if (fields.length !== 1) return;
+      void offerSave(fields[0]);
+    },
+    true
+  );
+}
+
+function bindSaveForms(root = document) {
+  for (const form of deepQueryAll(root, "form")) bindSaveForm(form);
+}
+
+bindSaveForms();
+setTimeout(() => bindSaveForms(), 1200);
+setTimeout(() => void showPendingSave(), 250);
+
 function scheduleRequest(field, kind) {
   if (!isActiveInstance()) return;
   clearTimeout(focusTimer);
@@ -792,6 +1035,7 @@ document.addEventListener(
     if (!isActiveInstance()) return;
     const found = eligibleField(event);
     if (!found) return;
+    bindSaveForm(closestComposed(found.field, "form"));
     scheduleRequest(found.field, found.kind);
   },
   true
@@ -803,6 +1047,7 @@ document.addEventListener(
     if (!isActiveInstance()) return;
     const found = eligibleField(event);
     if (!found) return;
+    bindSaveForm(closestComposed(found.field, "form"));
     if (found.field === activeField && panel && !panel.hidden) return;
     scheduleRequest(found.field, found.kind);
   },
@@ -891,6 +1136,26 @@ window.addEventListener("blur", () => {
   if (!isActiveInstance()) return;
   if (panel && !panel.hidden) closePanel();
 });
+
+// Some single-page sign-in forms never fire `submit`. Enter in a password field
+// is the reliable fallback, and the duplicate check makes it harmless when the
+// normal submit event follows.
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (!isActiveInstance() || !event.isTrusted || event.key !== "Enter") return;
+    const field = fieldFromEvent(event);
+    if (!(field instanceof HTMLInputElement) || field.type !== "password") return;
+    const form = closestComposed(field, "form");
+    if (!form) return;
+    setTimeout(() => {
+      if (event.defaultPrevented || !isActiveInstance()) return;
+      const fields = existingPasswordFields(form);
+      if (fields.length === 1) void offerSave(fields[0]);
+    }, 80);
+  },
+  true
+);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!isActiveInstance()) return undefined;

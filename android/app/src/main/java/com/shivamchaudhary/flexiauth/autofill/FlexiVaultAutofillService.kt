@@ -12,9 +12,11 @@ import android.service.autofill.FillCallback
 import android.service.autofill.FillRequest
 import android.service.autofill.FillResponse
 import android.service.autofill.SaveCallback
+import android.service.autofill.SaveInfo
 import android.service.autofill.SaveRequest
 import android.view.autofill.AutofillValue
 import com.shivamchaudhary.flexiauth.R
+import java.util.UUID
 
 class FlexiVaultAutofillService : AutofillService() {
   override fun onFillRequest(
@@ -30,34 +32,39 @@ class FlexiVaultAutofillService : AutofillService() {
       if (fields.packageName == packageName) {
         return callback.onSuccess(null)
       }
-      if (!AutofillAuthActivity.canAuthenticate(this)) {
-        // Filling without a device credential would hand passwords to any app
-        // that can draw a login form. Fail closed.
-        return callback.onSuccess(null)
-      }
 
-      val logins = AutofillCache.read(this)
-      if (logins.isEmpty()) return callback.onSuccess(null)
-
-      // Resolve the app label for native apps, including WebView-based ones
-      // that expose a web domain. Browsers are matched by web domain only; if
-      // a browser does not expose one, package-based guesses would surface
-      // unrelated logins on every page.
+      // Browsers are matched by web domain only. If a browser does not expose
+      // one, neither package-based guesses nor host-less saves are safe.
       val isBrowser = AutofillMatcher.isBrowserPackage(fields.packageName)
       if (isBrowser && fields.webDomain.isNullOrBlank()) {
         return callback.onSuccess(null)
       }
+      if (!isBrowser && fields.packageName.isNullOrBlank()) {
+        return callback.onSuccess(null)
+      }
+
+      // Save prompts are independent of the read-only cache and of device-auth
+      // availability for filling. A new vault can therefore capture a login on
+      // the first form submission, before any item has been cached.
+      val canFill = AutofillAuthActivity.canAuthenticate(this)
+      val logins = AutofillPendingStore.apply(this, AutofillCache.read(this))
+
+      // Resolve the app label for native apps, including WebView-based ones
+      // that expose a web domain.
       val appLabel = if (isBrowser) null else resolveAppLabel(fields.packageName)
       val targetTokens = AutofillMatcher.targetTokens(fields.packageName, appLabel)
-      val matches = logins
-        .map { login ->
-          login to AutofillMatcher.score(login, fields.webDomain, fields.packageName, targetTokens)
-        }
-        .filter { it.second > 0 }
-        .sortedByDescending { it.second }
-        .take(8)
-        .map { it.first }
-      if (matches.isEmpty()) return callback.onSuccess(null)
+      val matches = if (canFill) {
+        logins
+          .map { login ->
+            login to AutofillMatcher.score(login, fields.webDomain, fields.packageName, targetTokens)
+          }
+          .filter { it.second > 0 }
+          .sortedByDescending { it.second }
+          .take(8)
+          .map { it.first }
+      } else {
+        emptyList()
+      }
 
       val response = FillResponse.Builder()
       var added = 0
@@ -74,7 +81,22 @@ class FlexiVaultAutofillService : AutofillService() {
         }
       }
 
-      callback.onSuccess(if (added > 0) response.build() else null)
+      var saveRequested = false
+      fields.passwordId?.let { passwordId ->
+        val required = arrayOf(passwordId)
+        val builder = SaveInfo.Builder(SaveInfo.SAVE_DATA_TYPE_PASSWORD, required)
+        fields.usernameId?.let { usernameId ->
+          builder.setOptionalIds(arrayOf(usernameId))
+        }
+        response.setSaveInfo(builder.build())
+        saveRequested = true
+      }
+
+      if (added == 0 && !saveRequested) {
+        callback.onSuccess(null)
+      } else {
+        callback.onSuccess(response.build())
+      }
     } catch (_: Exception) {
       // Never crash the system autofill UI because one form was unusual.
       callback.onSuccess(null)
@@ -82,8 +104,102 @@ class FlexiVaultAutofillService : AutofillService() {
   }
 
   override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
-    // Saving new credentials is intentionally not supported yet. The app is the
-    // writer; the autofill service is a read-only fill path.
+    try {
+      var username: String? = null
+      var password: String? = null
+      var webDomain: String? = null
+      var targetPackage: String? = null
+
+      // A multi-step form can split the username and password across fill
+      // contexts. Merge non-null values from every context, keeping the latest.
+      for (context in request.fillContexts) {
+        val data = try {
+          context.structure?.let { AutofillParser.parseSave(it) }
+        } catch (_: Exception) {
+          null
+        } ?: continue
+        username = data.username ?: username
+        password = data.password ?: password
+        webDomain = data.webDomain ?: webDomain
+        targetPackage = data.packageName ?: targetPackage
+      }
+
+      if (password.isNullOrEmpty() || targetPackage == packageName) {
+        callback.onSuccess()
+        return
+      }
+
+      val isBrowser = AutofillMatcher.isBrowserPackage(targetPackage)
+      if (isBrowser && webDomain.isNullOrBlank()) {
+        callback.onSuccess()
+        return
+      }
+      if (!isBrowser && targetPackage.isNullOrBlank()) {
+        callback.onSuccess()
+        return
+      }
+
+      val appLabel = if (isBrowser) null else resolveAppLabel(targetPackage)
+      val targetTokens = AutofillMatcher.targetTokens(targetPackage, appLabel)
+      val logins = AutofillPendingStore.apply(this, AutofillCache.read(this))
+      val matches = logins
+        .map { login ->
+          login to AutofillMatcher.score(login, webDomain, targetPackage, targetTokens)
+        }
+        .filter { it.second > 0 }
+        .sortedByDescending { it.second }
+        .map { it.first }
+
+      val normalizedUsername = username?.trim()?.take(500)?.ifEmpty { null }
+      val existing = matches.firstOrNull {
+        it.username?.trim()?.equals(normalizedUsername, ignoreCase = true) == true
+      } ?: if (normalizedUsername == null) {
+        matches.firstOrNull { it.username.isNullOrBlank() }
+      } else {
+        null
+      }
+
+      // The form was submitted with the credentials we already have. Do not
+      // interrupt the user with a redundant prompt.
+      if (existing != null && existing.password == password) {
+        callback.onSuccess()
+        return
+      }
+
+      val defaultName = appLabel?.takeIf { it.isNotBlank() }
+        ?: webDomain?.takeIf { it.isNotBlank() }
+        ?: targetPackage?.takeIf { it.isNotBlank() }
+        ?: "Login"
+      val save = AutofillPendingSave(
+        itemId = existing?.id ?: UUID.randomUUID().toString(),
+        mode = if (existing != null) "update" else "create",
+        name = existing?.name ?: defaultName,
+        username = normalizedUsername,
+        password = password,
+        hosts = webDomain?.let { listOf(it) } ?: emptyList(),
+        packages = if (!isBrowser && targetPackage != null) {
+          listOf(targetPackage)
+        } else {
+          emptyList()
+        },
+        createdAt = System.currentTimeMillis(),
+      )
+      val token = AutofillSaveHandoff.put(save)
+      try {
+        startActivity(
+          Intent(this, AutofillSaveActivity::class.java)
+            .putExtra(AutofillSaveActivity.EXTRA_TOKEN, token)
+            // A service needs NEW_TASK. The activity has an empty task affinity,
+            // is translucent and is excluded from recents, so it appears over
+            // the calling app without switching to FlexiVault's main task.
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+      } catch (_: Exception) {
+        AutofillSaveHandoff.discard(token)
+      }
+    } catch (_: Exception) {
+      // A save prompt must never crash the calling app or the autofill service.
+    }
     callback.onSuccess()
   }
 
@@ -114,6 +230,10 @@ class FlexiVaultAutofillService : AutofillService() {
       putExtra(AutofillAuthActivity.EXTRA_LOGIN_NAME, login.name)
       putExtra(AutofillAuthActivity.EXTRA_USERNAME_ID, fields.usernameId)
       putExtra(AutofillAuthActivity.EXTRA_PASSWORD_ID, fields.passwordId)
+      putExtra(
+        AutofillAuthActivity.EXTRA_WEB_DOMAIN,
+        fields.webDomain.takeIf { AutofillMatcher.isBrowserPackage(fields.packageName) },
+      )
       // Deliberately no FLAG_ACTIVITY_NEW_TASK: the auth activity must stay in
       // the caller's task so it appears over the app being filled and finishing
       // returns there. NEW_TASK would bring FlexiVault's own task forward.

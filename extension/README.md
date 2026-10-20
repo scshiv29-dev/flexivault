@@ -1,10 +1,10 @@
 # FlexiVault browser extension
 
-A read-only companion to the FlexiVault mobile app. It unlocks the same
-end-to-end encrypted vault in a compact popup or a dedicated full-page tab,
-suggests saved logins and live TOTP codes directly on matching forms, and fills
-them when you choose an item. Creating and editing items stays on mobile so
-there is exactly one write path into the vault.
+A companion to the FlexiVault mobile app. It unlocks the same end-to-end
+encrypted vault in a compact popup or a dedicated full-page tab, suggests saved
+logins and live TOTP codes directly on matching forms, and fills them when you
+choose an item. It can also offer to save or update a login after a trusted form
+submit. Creating and editing other item types stays on mobile.
 
 Manifest V3, plain ES modules, no build step and no remote code.
 
@@ -40,6 +40,11 @@ the internet.
 - Generate live TOTP codes with a countdown and copy them.
 - Autofill the active tab from the popup, but only when its hostname matches the
   saved site.
+- Offer to save or update a login after a trusted form submit. The pending
+  credential is encrypted with the vault key in memory-backed session storage so
+  the prompt can survive a full-page navigation. The encrypted row is written to
+  the local cache first, marked dirty, then pushed to the configured server with
+  a revision conflict merge.
 - Open the saved website and sync on demand.
 - Auto-lock after 15 idle minutes, keeping the bearer token for a silent
   re-authentication on the next unlock.
@@ -120,11 +125,14 @@ reviewer demo account. Firefox is not supported yet.
   fill keeps the existing symmetric subdomain rule and only acts on the tab the
   user explicitly selected.
 - The content script reads the fields it is filling, shows the suggestion panel
-  in a closed, isolated shadow root, and sends only the field kind to the
-  worker. It never receives passwords while listing suggestions and exposes no
-  page-accessible API.
-- The background worker makes no network requests; sync and connect remain in
-  the popup.
+  in a closed, isolated shadow root, and sends the field kind to the worker. It
+  never receives passwords while listing suggestions and exposes no
+  page-accessible API. After a trusted form submit it sends the submitted login
+  to the worker, which keeps it encrypted with the vault key in
+  `chrome.storage.session` until the prompt is saved, dismissed, or expires. The
+  page never receives the pending password back.
+- The background worker contacts only the configured server, for encrypted sync
+  and save/update. Sign-in and connection setup remain in the popup.
 - Clipboard writes happen only after an explicit click.
 - No analytics, telemetry, remote fonts, or remote scripts.
 
@@ -136,23 +144,31 @@ reviewer demo account. Firefox is not supported yet.
 | `activeTab` | Read the active URL for popup autofill and message the page after a click |
 | `scripting` | Inject the content script into a tab that was already open before the extension was installed or reloaded, only after an explicit fill click |
 | `clipboardWrite` | Copy secrets on demand |
-| `http://*/*`, `https://*/*` | Inject the autofill content script; the background worker makes no network requests |
+| `http://*/*`, `https://*/*` | Inject the autofill content script and show save/update prompts. Network requests go only to the server URL configured by the user, for sync and save/update. |
 
 The broad host permission is required because autofill must work on any site
 the user saves. The extension only contacts the server URL configured by the
-user, and only from the popup. The content script runs on every http(s) page but
-only reacts to focus on password, username and one-time-code fields.
+user. The content script runs on every http(s) page but only reacts to focus on
+password, username and one-time-code fields, or to a trusted form submit that
+offers a save/update prompt.
 
 ### Known limitations
 
-- No create, edit, delete or password generation in the extension.
-- Sync is pull-only: mobile pushes, the extension refreshes. It never resolves
-  conflicts or writes to `/api/sync`.
+- The extension can save and update logins, but it cannot create or edit cards,
+  notes, identities, folders, TOTP seeds or other item types, delete items, or
+  generate passwords.
+- Sync normally pulls. After a save/update it writes the encrypted row locally
+  and pushes with the same revision conflict merge; it is not a general
+  full-vault editor.
 - Inline suggestions need an unlocked vault. The content script recognises
   login, username and common one-time-code fields, including fields inside open
   shadow roots and email-only first-step sign-in pages. It cannot see closed
   shadow roots, fields inside iframes, split one-character OTP boxes, or
   card/identity/CVC fields.
+- A save prompt can reappear after a full-page navigation on the originating
+  site, including a parent domain or a `www` variant. Cross-site SSO redirects do
+  not show it, because returning the pending password to another site would leak
+  it.
 - Inline suggestions are automatic, not a browser-native autofill provider, so
   they do not appear in Chrome's own autofill menu or on PDFs/browser UI.
 - Host matching is suffix-based, not a public-suffix check. Inline suggestions

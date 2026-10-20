@@ -1,9 +1,9 @@
 {
   "name": "@flexivault/extension",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
-  "description": "FlexiVault browser extension — read-only vault client with autofill and TOTP",
+  "description": "FlexiVault browser extension — encrypted vault client with autofill, save prompts and TOTP",
   "scripts": {
     "check": "node scripts/check.mjs",
     "test": "node scripts/content-test.mjs && node scripts/background-test.mjs && node scripts/smoke-test.mjs",

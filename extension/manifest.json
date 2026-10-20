@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FlexiVault",
-  "version": "1.0.2",
-  "description": "Unlock your self-hosted, end-to-end encrypted FlexiVault vault. Copy passwords, read TOTP codes and autofill logins.",
+  "version": "1.1.0",
+  "description": "Unlock your self-hosted, end-to-end encrypted FlexiVault vault. Autofill, save or update logins and copy TOTP codes.",
   "minimum_chrome_version": "116",
   "action": {
     "default_title": "FlexiVault",

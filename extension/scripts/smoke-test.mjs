@@ -419,7 +419,7 @@ try {
   await waitFor(() => bodyText().includes("Acme Portal"), "popup after full page");
 
   click('[data-action="settings"]');
-  await waitFor(() => bodyText().includes("Read-only by design."), "settings");
+  await waitFor(() => bodyText().includes("Autofill and save in the browser."), "settings");
   assert.ok(bodyText().includes(EMAIL));
   click('.settings-row [data-action="sync"]');
   await waitFor(() => bodyText().includes("Synced just now"), "manual sync");
@@ -433,6 +433,33 @@ try {
   assert.ok(!afterLock["flexivault.session"]?.encryptionKeyB64);
   pass("locking drops the vault key but keeps the session token");
 
+  // Simulate an inline save that was written locally but could not be pushed
+  // before the vault locked. Unlock must preserve it instead of replacing the
+  // cache with the remote snapshot.
+  const dirtyItem = item("item_dirty_save", {
+    type: "login",
+    name: "Offline Saved Login",
+    username: "offline@example.com",
+    password: "offline-password",
+    urls: ["https://offline.test"],
+  });
+  const dirtyRow = {
+    id: dirtyItem.id,
+    data: await encryptItem(vaultKey, dirtyItem),
+    updatedAt: Date.now(),
+  };
+  const dirtyCache = localArea.__get()["flexivault.cache"];
+  localArea.__set({
+    ...localArea.__get(),
+    "flexivault.cache": {
+      ...dirtyCache,
+      items: [...(dirtyCache.items ?? []), dirtyRow],
+      dirty: true,
+    },
+  });
+  await bootPopup("?phase=dirty-unlock");
+  await waitFor(() => query('[data-form="unlock"]'), "locked dirty cache");
+
   type("#password", "not-the-password");
   submit('[data-form="unlock"]');
   await waitFor(() => bodyText().includes("incorrect"), "wrong password error");
@@ -442,7 +469,17 @@ try {
   submit('[data-form="unlock"]');
   await waitFor(() => query(".item-list"), "vault after unlock", 30_000);
   await waitFor(() => bodyText().includes("Acme Portal"), "items after unlock");
+  await waitFor(
+    () => bodyText().includes("Offline Saved Login"),
+    "dirty save preserved after unlock"
+  );
+  assert.equal(
+    localArea.__get()["flexivault.cache"].dirty,
+    false,
+    "unlock flushes the dirty cache"
+  );
   pass("unlock re-authenticates with the stored token and restores the vault");
+  pass("unlock preserves and flushes an offline inline save");
 
   // A fresh popup boot should reuse the session and cache without a password.
   await bootPopup("?phase=reopen");

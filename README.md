@@ -54,14 +54,21 @@ The mobile app works entirely offline. A server only adds multi-device sync.
 - Android system autofill for browser and native-app login forms: hostname
   matching, explicit package matching plus app-label/token inference, a
   login-only encrypted cache, and a biometric/PIN check that appears over the
-  app being filled. Requires a native APK; iOS autofill is not implemented.
+  app being filled. Save/update prompts appear over the app being filled and
+  queue locked-vault saves in a Keystore-encrypted store. Requires a native APK;
+  iOS autofill is not implemented.
+- Android 14+ passkeys: FlexiVault can create and assert synced P-256 passkeys
+  through Android's Credential Manager, with every signature gated by a
+  biometric/PIN check. Passkeys sync as encrypted vault items and are mirrored
+  into a Keystore-encrypted native store. iOS and browser-extension passkeys are
+  not implemented.
 - Encrypted backup export (ciphertext + KDF parameters) and device reset.
 - Optional self-hosted sync with revision conflict detection.
 - Optional server-side TOTP as a second factor for sign-in.
 
 ### Browser extension
 
-- Read-only vault browser with search and filters, as a compact popup or a
+- Encrypted vault browser with search and filters, as a compact popup or a
   dedicated responsive full-page tab.
 - Inline suggestions on matching login fields. Choosing one fills the form
   without opening the toolbar popup.
@@ -72,6 +79,9 @@ The mobile app works entirely offline. A server only adds multi-device sync.
 - Autofill of username/password, refused when the active hostname does not
   match the saved site. Inline suggestions use the saved hostname or one of its
   subdomains, never a look-alike.
+- Save/update prompt on a trusted form submit. The encrypted row is written to
+  the local cache first, marked dirty, then pushed with the same revision
+  conflict merge as the mobile app.
 - 15-minute idle auto-lock; the session token survives a lock for silent
   re-authentication. Disconnect clears everything.
 - No remote code, no analytics, no build step.
@@ -129,7 +139,9 @@ snapshot with `{ baseRevision, items }`:
 2. If the server revision moved, it returns `409 revision_mismatch` with the
    current snapshot. The client merges and retries (up to 4 times).
 3. `force: true` is reserved for the explicit "replace this device" flow.
-4. The extension only pulls; the mobile app is the single writer.
+4. The extension normally pulls. After a save/update it writes the encrypted
+   row to its local cache and pushes with the same revision-merge loop. The
+   mobile app remains the primary editor.
 
 ## Getting started
 
@@ -392,13 +404,20 @@ use an EAS preview build; the seeded account and server URL work the same way.
   on a device; Expo Go cannot provide it. It fills only login username/password
   pairs and only the first detected pair in a form. Cards and identities can be
   stored, viewed and copied, but they are not offered by system autofill.
-  Passkeys and save/update prompts are not implemented. iOS autofill is not
-  implemented. See [`docs/AUTOFILL.md`](docs/AUTOFILL.md).
-- No sharing, organizations, collections, passkeys, or file attachments.
+  Save/update prompts and Android 14+ passkeys are implemented and need
+  on-device verification. Existing passkeys are software keys with `fmt:"none"`
+  attestation, so RPs that require hardware attestation will reject them.
+  Browser passkeys depend on the bundled privileged-app allowlist and currently
+  target Chrome and Edge. iOS autofill and passkeys are not implemented. See
+  [`docs/AUTOFILL.md`](docs/AUTOFILL.md).
+- No sharing, organizations, collections, browser-extension passkeys, or file
+  attachments.
 - Single-node server only; in-memory rate limits do not span replicas.
 - No account deletion or password-change endpoint; manage the data directory
   manually. Rotating the master password would require re-encrypting the vault.
-- The extension cannot create or edit items and never writes to `/api/sync`.
+- The extension can save and update login credentials from a trusted form
+  submit; it cannot create or edit other item types. It never stores plaintext
+  item fields remotely.
 - Inline suggestions require an unlocked vault and a login field. Fields inside
   open shadow roots and email-only first-step logins are supported; closed shadow
   roots, iframes, split one-character OTP boxes, and card/identity/CVC fields are

@@ -28,6 +28,10 @@ import {
   isAutofillEnabledOnDevice,
   openAutofillSettings,
 } from "@/lib/native/autofill";
+import {
+  isPasskeyProviderAvailable,
+  openPasskeySettings,
+} from "@/lib/native/passkeys";
 import { useVault } from "@/lib/state/vault-provider";
 import { useAppTheme } from "@/lib/theme";
 import type { ThemeMode } from "@/lib/vault/types";
@@ -193,6 +197,7 @@ export default function SettingsScreen() {
   const [autofillAvailable, setAutofillAvailable] = useState(false);
   const [autofillDeviceEnabled, setAutofillDeviceEnabled] = useState(false);
   const [autofillBusy, setAutofillBusy] = useState(false);
+  const [passkeyAvailable, setPasskeyAvailable] = useState(false);
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -204,6 +209,9 @@ export default function SettingsScreen() {
       });
       isAutofillEnabledOnDevice().then((enabled) => {
         if (!cancelled) setAutofillDeviceEnabled(enabled);
+      });
+      isPasskeyProviderAvailable().then((available) => {
+        if (!cancelled) setPasskeyAvailable(available);
       });
     };
 
@@ -303,6 +311,14 @@ export default function SettingsScreen() {
   const openAndroidAutofill = async () => {
     try {
       await openAutofillSettings();
+    } catch (caught) {
+      toast.show((caught as Error).message, "danger");
+    }
+  };
+
+  const openAndroidPasskeys = async () => {
+    try {
+      await openPasskeySettings();
     } catch (caught) {
       toast.show((caught as Error).message, "danger");
     }
@@ -527,6 +543,24 @@ export default function SettingsScreen() {
                 onPress={openAndroidAutofill}
               />
             ) : null}
+            <SettingRow
+              icon="key"
+              title="Android passkeys"
+              subtitle={
+                passkeyAvailable
+                  ? "Create and use passkeys in apps and Chrome"
+                  : "Requires Android 14 or newer"
+              }
+              onPress={passkeyAvailable ? openAndroidPasskeys : undefined}
+            />
+            {passkeyAvailable ? (
+              <Callout
+                tone="info"
+                title="Passkeys stay in your encrypted vault"
+                body="Choose FlexiVault as your passkey provider in Android settings. Creating or using a passkey asks for your fingerprint, face, or screen lock. Passkeys sync as encrypted vault items."
+                style={{ marginTop: 10 }}
+              />
+            ) : null}
             {autofillAvailable && settings.autofillEnabled ? (
               <Callout
                 tone={autofillDeviceEnabled ? "success" : "warning"}
@@ -649,7 +683,7 @@ export default function SettingsScreen() {
         <SettingRow icon="shield" title="Encryption" right={<AppText variant="small">AES-256-GCM</AppText>} />
         <SettingRow icon="hash" title="Key derivation" right={<AppText variant="small">PBKDF2 · 210k</AppText>} />
         <SettingRow icon="cloud" title="Sync" right={<AppText variant="small">Self-hosted</AppText>} />
-        <SettingRow icon="info" title="Version" right={<AppText variant="small">{Constants.expoConfig?.version ?? "1.0.2"}</AppText>} last />
+        <SettingRow icon="info" title="Version" right={<AppText variant="small">{Constants.expoConfig?.version ?? "1.1.0"}</AppText>} last />
       </Card>
 
       <AppText

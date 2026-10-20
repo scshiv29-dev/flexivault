@@ -1,8 +1,15 @@
 /* Inline autofill suggestions: host-matched, decrypted in the worker only. */
 
-import { base64ToBytes, decryptItem, importVaultKey } from "./src/crypto.js";
+import {
+  base64ToBytes,
+  decryptItem,
+  encryptItem,
+  importVaultKey,
+  newItemId,
+} from "./src/crypto.js";
 import { generateTotp } from "./src/otp.js";
-import { siteHost } from "./src/presentation.js";
+import { sameSite, siteHost } from "./src/presentation.js";
+import { pushDirtyCache } from "./src/sync.js";
 import {
   CACHE_KEY,
   CONFIG_KEY,
@@ -15,6 +22,8 @@ import {
 const MAX_SUGGESTIONS = 6;
 const TOUCH_INTERVAL_MS = 15_000;
 const DECRYPT_BATCH_SIZE = 32;
+const PENDING_SAVE_PREFIX = "flexivault.pending-save.";
+const PENDING_SAVE_TTL_MS = 5 * 60 * 1000;
 let lastTouchAt = 0;
 // Suggestion metadata and the encrypted row map stay in worker memory only.
 // Passwords and TOTP secrets are decrypted per fill; every read still requires
@@ -46,7 +55,9 @@ function vaultCacheKey(cache, storedSession) {
     storedSession.encryptionKeyB64,
     cache.revision ?? 0,
     cache.lastSyncedAt ?? 0,
+    cache.dirty ? 1 : 0,
     rows.length,
+    rows.reduce((sum, row) => sum + Number(row?.updatedAt ?? 0), 0),
     rows[0]?.id ?? "",
     rows[rows.length - 1]?.id ?? "",
   ].join(":");
@@ -109,11 +120,25 @@ async function readVault() {
   const cache = stored[CACHE_KEY] ?? { items: [] };
   if (!config) {
     decryptedVault = null;
-    return { configured: false, locked: false, items: [], vaultSession: null };
+    return {
+      configured: false,
+      locked: false,
+      items: [],
+      vaultSession: null,
+      config: null,
+      cache: null,
+    };
   }
   if (!storedSession?.encryptionKeyB64 || !isSessionFresh(storedSession)) {
     decryptedVault = null;
-    return { configured: true, locked: true, items: [], vaultSession: null };
+    return {
+      configured: true,
+      locked: true,
+      items: [],
+      vaultSession: null,
+      config,
+      cache,
+    };
   }
 
   const cacheKey = vaultCacheKey(cache, storedSession);
@@ -125,6 +150,8 @@ async function readVault() {
       rows: decryptedVault.rows,
       vaultKey: decryptedVault.vaultKey,
       vaultSession: storedSession,
+      config,
+      cache,
     };
   }
 
@@ -133,7 +160,14 @@ async function readVault() {
     key = await importVaultKey(base64ToBytes(storedSession.encryptionKeyB64));
   } catch {
     decryptedVault = null;
-    return { configured: true, locked: true, items: [], vaultSession: null };
+    return {
+      configured: true,
+      locked: true,
+      items: [],
+      vaultSession: null,
+      config,
+      cache,
+    };
   }
 
   const rows = Array.isArray(cache.items) ? cache.items : [];
@@ -148,6 +182,8 @@ async function readVault() {
     rows: byId,
     vaultKey: key,
     vaultSession: storedSession,
+    config,
+    cache,
   };
 }
 
@@ -178,6 +214,285 @@ function suggestion(item) {
     username: item.username || "",
     issuer: item.totp?.issuer || "",
     label: item.totp?.label || "",
+  };
+}
+
+function cleanUsername(value) {
+  return String(value ?? "").trim().slice(0, 500);
+}
+
+function cleanPassword(value) {
+  return typeof value === "string" ? value.slice(0, 4096) : "";
+}
+
+function urlForHost(host) {
+  return host === "localhost" ? "http://localhost" : `https://${host}`;
+}
+
+async function findCredential(vault, host, username) {
+  const wanted = cleanUsername(username).toLowerCase();
+  for (const candidate of candidates(vault, host, "login")) {
+    if (cleanUsername(candidate.username).toLowerCase() !== wanted) continue;
+    const row = vault.rows?.get(candidate.id);
+    if (!row?.data) continue;
+    try {
+      const item = await decryptItem(vault.vaultKey, row.data);
+      if (item?.type === "login" && !item.deletedAt) return item;
+    } catch {
+      // A corrupt row must not block saving a different credential.
+    }
+  }
+  return null;
+}
+
+function senderTabId(sender) {
+  const id = sender?.tab?.id;
+  return Number.isInteger(id) ? id : null;
+}
+
+function pendingSaveKey(tabId) {
+  return `${PENDING_SAVE_PREFIX}${tabId}`;
+}
+
+async function writePendingSave(tabId, vaultKey, value) {
+  if (tabId == null || !vaultKey) return;
+  await chrome.storage.session.set({
+    [pendingSaveKey(tabId)]: {
+      createdAt: Date.now(),
+      data: await encryptItem(vaultKey, value),
+    },
+  });
+}
+
+async function readPendingEnvelope(tabId) {
+  if (tabId == null) return null;
+  const key = pendingSaveKey(tabId);
+  const stored = (await chrome.storage.session.get(key))[key];
+  if (!stored || typeof stored.data !== "string") return null;
+  if (Date.now() - Number(stored.createdAt ?? 0) > PENDING_SAVE_TTL_MS) {
+    await chrome.storage.session.remove(key);
+    return null;
+  }
+  return stored;
+}
+
+async function readPendingSave(tabId, vaultKey) {
+  if (tabId == null || !vaultKey) return null;
+  const stored = await readPendingEnvelope(tabId);
+  if (!stored) return null;
+  try {
+    const value = await decryptItem(vaultKey, stored.data);
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    await chrome.storage.session.remove(pendingSaveKey(tabId));
+    return null;
+  }
+}
+
+async function clearPendingSave(tabId) {
+  if (tabId == null) return;
+  await chrome.storage.session.remove(pendingSaveKey(tabId));
+}
+
+async function pendingSave(sender, host) {
+  const tabId = senderTabId(sender);
+  if (tabId == null || !(await readPendingEnvelope(tabId))) {
+    return { ok: true, prompt: null };
+  }
+  const vault = await readVault();
+  if (!vault.configured || vault.locked) {
+    return { ok: true, prompt: null };
+  }
+  const pending = await readPendingSave(tabId, vault.vaultKey);
+  if (!pending || !sameSite(pending.host, host)) {
+    return { ok: true, prompt: null };
+  }
+  return {
+    ok: true,
+    prompt: {
+      id: pending.id,
+      action: pending.action,
+      name: pending.name,
+      host: pending.host,
+    },
+  };
+}
+
+async function dismissSave(sender, promptId) {
+  const tabId = senderTabId(sender);
+  if (tabId == null || !(await readPendingEnvelope(tabId))) {
+    return { ok: true };
+  }
+  const vault = await readVault();
+  if (vault.configured && !vault.locked) {
+    const pending = await readPendingSave(tabId, vault.vaultKey);
+    if (pending && pending.id !== String(promptId ?? "")) {
+      return { ok: false, error: "This save prompt is no longer active." };
+    }
+  }
+  await clearPendingSave(tabId);
+  return { ok: true };
+}
+
+async function savePrompt(message, host, sender) {
+  const tabId = senderTabId(sender);
+  if (tabId != null) await clearPendingSave(tabId);
+  const username = cleanUsername(message.username);
+  const password = cleanPassword(message.password);
+  if (!password) return { ok: true, action: "none" };
+
+  const vault = await readVault();
+  if (!vault.configured || vault.locked) {
+    return {
+      ok: true,
+      configured: Boolean(vault.configured),
+      locked: Boolean(vault.locked),
+      action: "none",
+    };
+  }
+
+  const existing = await findCredential(vault, host, username);
+  if (existing?.password === password) {
+    return { ok: true, action: "none" };
+  }
+  const proposed = String(message.name ?? "").trim().slice(0, 200);
+  const pending = existing
+    ? {
+        id: newItemId(),
+        action: "update",
+        itemId: existing.id,
+        name: existing.name || host,
+        host,
+        username,
+        password,
+      }
+    : {
+        id: newItemId(),
+        action: "create",
+        itemId: null,
+        name: proposed || host,
+        host,
+        username,
+        password,
+      };
+  if (tabId == null) return { ok: true, action: "none" };
+  await writePendingSave(tabId, vault.vaultKey, pending);
+  return { ok: true, pending: true, action: pending.action };
+}
+
+
+async function saveCredential(message, host, sender) {
+  const vault = await readVault();
+  if (vault.locked) {
+    return { ok: false, locked: true, error: "Unlock FlexiVault first." };
+  }
+  if (!vault.config || !vault.cache) {
+    return { ok: false, error: "Connect a vault before saving a login." };
+  }
+
+  const tabId = senderTabId(sender);
+  const pending = await readPendingSave(tabId, vault.vaultKey);
+  if (
+    !pending ||
+    !sameSite(pending.host, host) ||
+    pending.id !== String(message.promptId ?? "")
+  ) {
+    return {
+      ok: false,
+      error: "This save prompt has expired. Submit the form again.",
+    };
+  }
+  const targetHost = pending.host;
+  const action = pending.action === "update" ? "update" : "create";
+  const username = cleanUsername(pending.username);
+  const password = cleanPassword(pending.password);
+  if (!password) {
+    await clearPendingSave(tabId);
+    return { ok: false, error: "The password is empty." };
+  }
+
+  const now = Date.now();
+  let item;
+  if (action === "update") {
+    const id = String(pending.itemId ?? "");
+    const row = vault.rows?.get(id);
+    if (!row?.data) {
+      return { ok: false, error: "That saved login no longer exists." };
+    }
+    try {
+      item = await decryptItem(vault.vaultKey, row.data);
+    } catch {
+      return { ok: false, error: "That saved login could not be decrypted." };
+    }
+    if (!item || item.deletedAt || !matchesHost(item, targetHost)) {
+      return { ok: false, error: "That saved login does not match this website." };
+    }
+    item = {
+      ...item,
+      username: username || item.username,
+      password,
+      urls: Array.from(
+        new Set([...(item.urls ?? []), urlForHost(targetHost)])
+      ),
+      updatedAt: now,
+      deletedAt: null,
+    };
+  } else {
+    const name = String(pending.name ?? "").trim().slice(0, 200) || targetHost;
+    item = {
+      id: newItemId(),
+      type: "login",
+      name,
+      username: username || undefined,
+      password,
+      urls: [urlForHost(targetHost)],
+      androidPackages: [],
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    };
+  }
+
+  const row = {
+    id: item.id,
+    data: await encryptItem(vault.vaultKey, item),
+    updatedAt: item.updatedAt,
+  };
+  const cache = {
+    ...vault.cache,
+    items: [
+      ...(Array.isArray(vault.cache.items) ? vault.cache.items : []).filter(
+        (entry) => entry.id !== item.id
+      ),
+      row,
+    ],
+    dirty: true,
+  };
+
+  await local.set({ [CACHE_KEY]: cache });
+  decryptedVault = null;
+  await clearPendingSave(tabId);
+
+  let synced = false;
+  try {
+    const pushed = await pushDirtyCache({
+      config: vault.config,
+      session: vault.vaultSession,
+      cache,
+    });
+    await local.set({ [CACHE_KEY]: pushed.cache });
+    synced = true;
+  } catch {
+    // Keep the local row and dirty flag. The popup flushes it on the next open.
+  }
+
+  await touch();
+  return {
+    ok: true,
+    action,
+    id: item.id,
+    name: item.name,
+    synced,
   };
 }
 
@@ -266,13 +581,33 @@ async function handle(message, sender) {
     };
   }
 
+  if (message.type === "flexivault:save-prompt") {
+    return savePrompt(message, host, sender);
+  }
+
+  if (message.type === "flexivault:pending-save") {
+    return pendingSave(sender, host);
+  }
+
+  if (message.type === "flexivault:save") {
+    return saveCredential(message, host, sender);
+  }
+
+  if (message.type === "flexivault:dismiss-save") {
+    return dismissSave(sender, message.promptId);
+  }
+
   return undefined;
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (
     message?.type !== "flexivault:suggest" &&
-    message?.type !== "flexivault:suggest-fill"
+    message?.type !== "flexivault:suggest-fill" &&
+    message?.type !== "flexivault:save-prompt" &&
+    message?.type !== "flexivault:pending-save" &&
+    message?.type !== "flexivault:save" &&
+    message?.type !== "flexivault:dismiss-save"
   ) {
     return undefined;
   }
