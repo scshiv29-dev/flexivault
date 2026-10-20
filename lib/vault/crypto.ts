@@ -3,6 +3,8 @@ import { pbkdf2Async } from "@noble/hashes/pbkdf2";
 import { sha256 } from "@noble/hashes/sha256";
 import * as Crypto from "expo-crypto";
 
+import { nativePbkdf2 } from "@/lib/native/pbkdf2";
+
 import {
   base64ToBytes,
   bytesToBase64,
@@ -48,12 +50,19 @@ export async function deriveKeys(
   const salt = base64ToBytes(kdfSalt);
   if (salt.length < 16) throw new Error("KDF salt is too short");
 
-  const material = await pbkdf2Async(
-    sha256,
-    utf8ToBytes(normalisePassword(password)),
-    salt,
-    { c: kdfIterations, dkLen: 64 }
+  const normalised = normalisePassword(password);
+  const nativeMaterial = await nativePbkdf2(
+    normalised,
+    bytesToBase64(salt),
+    kdfIterations,
+    64
   );
+  const material =
+    nativeMaterial ??
+    (await pbkdf2Async(sha256, utf8ToBytes(normalised), salt, {
+      c: kdfIterations,
+      dkLen: 64,
+    }));
 
   const encryptionKey = material.slice(0, 32);
   const authMaterial = material.slice(32, 64);

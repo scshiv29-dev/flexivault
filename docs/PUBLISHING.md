@@ -160,7 +160,7 @@ The `release.yml` tag build publishes:
 
 ```text
 ghcr.io/scshiv29-dev/flexivault-server:latest
-ghcr.io/scshiv29-dev/flexivault-server:v1.0.0
+ghcr.io/scshiv29-dev/flexivault-server:v1.0.1
 ghcr.io/scshiv29-dev/flexivault-server:sha-<commit>
 ```
 
@@ -183,18 +183,18 @@ cd ..
 
 # 2. Commit and tag.
 git add -A
-git commit -m "Release 1.0.0"
-git tag -a v1.0.0 -m "FlexiVault 1.0.0"
+git commit -m "Release 1.0.1"
+git tag -a v1.0.1 -m "FlexiVault 1.0.1"
 git push origin main
-git push origin v1.0.0
+git push origin v1.0.1
 ```
 
 Wait for the **Release** workflow. When it finishes:
 
-- **Releases** contains `FlexiVault-1.0.0.apk`,
-  `FlexiVault-1.0.0.apk.sha256`, `FlexiVault-Extension-1.0.0.zip` and
-  `FlexiVault-Extension-1.0.0.zip.sha256`.
-- GHCR contains `latest`, `v1.0.0` and the commit tag for the server image.
+- **Releases** contains `FlexiVault-1.0.1.apk`,
+  `FlexiVault-1.0.1.apk.sha256`, `FlexiVault-Extension-1.0.1.zip` and
+  `FlexiVault-Extension-1.0.1.zip.sha256`.
+- GHCR contains `latest`, `v1.0.1` and the commit tag for the server image.
 
 If the tag already exists, delete the remote tag and recreate it only after
 understanding that users may already have downloaded the old release.
@@ -221,7 +221,7 @@ until a Firefox port has been tested.
 image: "ghcr.io/scshiv29-dev/flexivault-server:${FLEXIVAULT_IMAGE_TAG:-latest}"
 ```
 
-Set `FLEXIVAULT_IMAGE_TAG` to a release tag such as `v1.0.0` for reproducible
+Set `FLEXIVAULT_IMAGE_TAG` to a release tag such as `v1.0.1` for reproducible
 deployments, or to `edge` to follow `main`. Keep the named data volume (Coolify
 prefixes its name); it holds SQLite, the JWT key and the server encryption key.
 The public domain must route to the container's internal port `8787`; see
@@ -236,7 +236,7 @@ docker run -d \
   -p 8787:8787 \
   -v flexivault-data:/data \
   -e REGISTRATION_OPEN=true \
-  ghcr.io/scshiv29-dev/flexivault-server:v1.0.0
+  ghcr.io/scshiv29-dev/flexivault-server:v1.0.1
 ```
 
 See [`COOLIFY.md`](COOLIFY.md) for domains, backups and environment variables.
@@ -246,23 +246,23 @@ See [`COOLIFY.md`](COOLIFY.md) for domains, backups and environment variables.
 ```powershell
 # APK
 & "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --print-certs `
-  FlexiVault-1.0.0.apk
-Get-FileHash FlexiVault-1.0.0.apk -Algorithm SHA256
+  FlexiVault-1.0.1.apk
+Get-FileHash FlexiVault-1.0.1.apk -Algorithm SHA256
 
 # Compare with the .sha256 file on the release page.
 ```
 
 ```powershell
 # Extension zip
-Get-FileHash FlexiVault-Extension-1.0.0.zip -Algorithm SHA256
-tar -tf FlexiVault-Extension-1.0.0.zip | Select-Object -First 12
+Get-FileHash FlexiVault-Extension-1.0.1.zip -Algorithm SHA256
+tar -tf FlexiVault-Extension-1.0.1.zip | Select-Object -First 12
 # manifest.json must be at the zip root; entry order does not matter.
 ```
 
 ```bash
 # Server image
 docker buildx imagetools inspect \
-  ghcr.io/scshiv29-dev/flexivault-server:v1.0.0
+  ghcr.io/scshiv29-dev/flexivault-server:v1.0.1
 ```
 
 ## Troubleshooting

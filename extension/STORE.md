@@ -23,12 +23,12 @@ Push-Location extension
 Compress-Archive `
   -Path manifest.json, background.js, content.js, popup.html, popup.css, `
         popup.js, vault.html, src, fonts, icons `
-  -DestinationPath ..\dist\FlexiVault-Extension-1.0.0.zip `
+  -DestinationPath ..\dist\FlexiVault-Extension-1.0.1.zip `
   -Force
 Pop-Location
 
-tar -tf dist\FlexiVault-Extension-1.0.0.zip | Select-Object -First 12
-Get-FileHash dist\FlexiVault-Extension-1.0.0.zip -Algorithm SHA256
+tar -tf dist\FlexiVault-Extension-1.0.1.zip | Select-Object -First 12
+Get-FileHash dist\FlexiVault-Extension-1.0.1.zip -Algorithm SHA256
 ```
 
 The zip must contain `manifest.json` at its **root**, not inside an
@@ -40,7 +40,7 @@ On Linux/macOS, use the same file list with `zip`:
 
 ```bash
 cd extension
-zip -r ../dist/FlexiVault-Extension-1.0.0.zip \
+zip -r ../dist/FlexiVault-Extension-1.0.1.zip \
   manifest.json background.js content.js popup.html popup.css popup.js \
   vault.html src fonts icons
 ```
@@ -180,6 +180,7 @@ will reject the item as non-functional.
 | --- | --- |
 | `storage` | Stores the server URL, account email, encrypted vault cache, session token and derived-session key. The cache contains ciphertext only; the key is kept in memory-backed `chrome.storage.session`. |
 | `activeTab` | Reads the active tab's URL for the user-initiated popup autofill and opens the content-script connection after the user clicks a suggestion. |
+| `scripting` | Injects the packaged content script into a tab that was already open before the extension was installed or reloaded, only after the user clicks Autofill. |
 | `clipboardWrite` | Copies a password, card number, note or TOTP code only after the user clicks Copy. |
 | `http://*/*`, `https://*/*` | The content script must detect login and one-time-code fields on any site where the user has saved an item. It reads only the fields it may fill, shows suggestions in an isolated shadow root, and sends only the field kind to the background worker. The background worker makes no network requests; sync and sign-in happen only in the popup. |
 

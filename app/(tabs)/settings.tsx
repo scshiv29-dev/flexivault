@@ -526,6 +526,14 @@ export default function SettingsScreen() {
                 onPress={openAndroidAutofill}
               />
             ) : null}
+            {autofillAvailable && settings.autofillEnabled ? (
+              <Callout
+                tone="info"
+                title="Using Chrome?"
+                body="Open Chrome → Settings → Autofill and passwords → Autofill services and pick “Autofill using another service”. Restart Chrome after changing it. Other browsers use the Android picker directly."
+                style={{ marginTop: 10 }}
+              />
+            ) : null}
           </>
         ) : null}
         <SettingRow

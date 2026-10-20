@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import { useState } from "react";
-import { Alert, Platform, View } from "react-native";
+import { Alert, Keyboard, Platform, View } from "react-native";
 
 import { AuthShell } from "@/components/auth/AuthShell";
 import { AppText } from "@/components/ui/AppText";
@@ -44,6 +44,7 @@ export default function UnlockScreen() {
 
   const submit = async () => {
     if (!password) return;
+    Keyboard.dismiss();
     setLoading(true);
     setError(null);
     try {

@@ -1,6 +1,6 @@
 {
   "name": "@flexivault/extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "FlexiVault browser extension — read-only vault client with autofill and TOTP",

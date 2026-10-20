@@ -1,7 +1,9 @@
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 import {
+  FlatList,
+  Platform,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -28,6 +30,18 @@ import {
   groupItemsAlphabetically,
 } from "@/lib/vault/presentation";
 import { analyzeSecurity } from "@/lib/vault/security";
+import type { VaultItem } from "@/lib/vault/types";
+
+type VaultRow =
+  | {
+      key: string;
+      kind: "section";
+      title: string;
+      action?: string;
+      onAction?: () => void;
+    }
+  | { key: string; kind: "letter"; letter: string; count: number }
+  | { key: string; kind: "item"; item: VaultItem; favorite?: boolean };
 
 export default function VaultScreen() {
   const theme = useAppTheme();
@@ -45,16 +59,26 @@ export default function VaultScreen() {
   const [category, setCategory] = useState("all");
   const [groupFilter, setGroupFilter] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const deferredQuery = useDeferredValue(query);
 
   const report = useMemo(() => analyzeSecurity(items), [items]);
   const favorites = useMemo(
     () => items.filter((item) => item.favorite && !item.deletedAt),
     [items]
   );
-  const codesCount = useMemo(
-    () => items.filter((item) => item.totp?.secret).length,
-    [items]
-  );
+  const counts = useMemo(() => {
+    let logins = 0;
+    let cards = 0;
+    let notes = 0;
+    let codes = 0;
+    for (const item of items) {
+      if (item.type === "login") logins += 1;
+      if (item.type === "card") cards += 1;
+      if (item.type === "note" || item.type === "identity") notes += 1;
+      if (item.totp?.secret) codes += 1;
+    }
+    return { logins, cards, notes, codes };
+  }, [items]);
   const groupsList = useMemo(() => listGroups(items), [items]);
   const groupKeys = useMemo(
     () => new Set(groupsList.map((group) => group.name)),
@@ -64,25 +88,64 @@ export default function VaultScreen() {
 
   const filtered = useMemo(
     () =>
-      filterItems(items, category, query).filter(
+      filterItems(items, category, deferredQuery).filter(
         (item) => !activeGroup || item.folder?.trim() === activeGroup
       ),
-    [items, category, query, activeGroup]
+    [items, category, deferredQuery, activeGroup]
   );
   const groups = useMemo(() => groupItemsAlphabetically(filtered), [filtered]);
-  const searching = query.trim().length > 0;
+  const searching = deferredQuery.trim().length > 0;
 
   const options = useMemo(
     () => [
       { key: "all", label: "All", count: items.length },
       { key: "favorites", label: "Favorites", icon: "star" as const, count: favorites.length },
-      { key: "logins", label: "Logins", count: items.filter((item) => item.type === "login").length },
-      { key: "codes", label: "2FA", icon: "hash" as const, count: codesCount },
-      { key: "cards", label: "Cards", count: items.filter((item) => item.type === "card").length },
-      { key: "notes", label: "Notes", count: items.filter((item) => item.type === "note" || item.type === "identity").length },
+      { key: "logins", label: "Logins", count: counts.logins },
+      { key: "codes", label: "2FA", icon: "hash" as const, count: counts.codes },
+      { key: "cards", label: "Cards", count: counts.cards },
+      { key: "notes", label: "Notes", count: counts.notes },
     ],
-    [items, favorites.length, codesCount]
+    [items.length, favorites.length, counts]
   );
+
+  const rows = useMemo<VaultRow[]>(() => {
+    const next: VaultRow[] = [];
+    if (!searching && category === "all" && !activeGroup && favorites.length > 0) {
+      next.push({
+        key: "pinned-header",
+        kind: "section",
+        title: "Pinned",
+        action: favorites.length > 4 ? "View all" : undefined,
+        onAction: () => setCategory("favorites"),
+      });
+      for (const item of favorites.slice(0, 4)) {
+        next.push({ key: `fav-${item.id}`, kind: "item", item, favorite: true });
+      }
+    }
+
+    if (searching) {
+      next.push({
+        key: "search-header",
+        kind: "section",
+        title: `${filtered.length} ${filtered.length === 1 ? "result" : "results"}`,
+      });
+    }
+
+    for (const group of groups) {
+      if (!searching) {
+        next.push({
+          key: `letter-${group.letter}`,
+          kind: "letter",
+          letter: group.letter,
+          count: group.items.length,
+        });
+      }
+      for (const item of group.items) {
+        next.push({ key: item.id, kind: "item", item });
+      }
+    }
+    return next;
+  }, [searching, category, activeGroup, favorites, filtered.length, groups]);
 
   const refresh = async () => {
     if (!session?.token) return;
@@ -116,20 +179,8 @@ export default function VaultScreen() {
 
   const initial = (session?.email?.[0] || "F").toUpperCase();
 
-  return (
-    <Screen
-      refreshControl={
-        session?.token ? (
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={refresh}
-            tintColor={theme.colors.accent}
-            colors={[theme.colors.accent]}
-            progressBackgroundColor={theme.colors.card}
-          />
-        ) : undefined
-      }
-    >
+  const header = (
+    <>
       <View style={styles.topRow}>
         <View style={styles.brand}>
           <BrandMark size={30} />
@@ -231,17 +282,13 @@ export default function VaultScreen() {
         >
           <Feather name="hash" size={13} color={theme.colors.accent} />
           <AppText variant="label" color={theme.colors.textMuted}>
-            {codesCount} {codesCount === 1 ? "code" : "codes"} live
+            {counts.codes} {counts.codes === 1 ? "code" : "codes"} live
           </AppText>
         </Pressable>
       </View>
 
       {syncError ? (
-        <Callout
-          tone="danger"
-          body={syncError}
-          style={{ marginTop: 12 }}
-        />
+        <Callout tone="danger" body={syncError} style={{ marginTop: 12 }} />
       ) : null}
 
       <Pressable
@@ -297,131 +344,133 @@ export default function VaultScreen() {
           />
         </>
       ) : null}
+    </>
+  );
 
-      {items.length === 0 ? (
-        <EmptyState
-          icon="shield"
-          title="A clean slate"
-          body="Add a login, a secure note, or your first authenticator. Everything is encrypted before it touches the disk."
-          actionLabel="Add your first item"
-          onAction={() => router.push("/new")}
+  const empty =
+    items.length === 0 ? (
+      <EmptyState
+        icon="shield"
+        title="A clean slate"
+        body="Add a login, a secure note, or your first authenticator. Everything is encrypted before it touches the disk."
+        actionLabel="Add your first item"
+        onAction={() => router.push("/new")}
+      />
+    ) : filtered.length === 0 ? (
+      <EmptyState
+        icon="search"
+        title={searching ? "Nothing matches" : "Nothing here yet"}
+        body={
+          searching
+            ? "Try a different name, username or website."
+            : "Add an item to this category, or switch filters."
+        }
+        actionLabel={searching ? "Clear search" : "Add an item"}
+        onAction={() => {
+          if (searching) setQuery("");
+          else router.push("/new");
+        }}
+        compact
+      />
+    ) : null;
+
+  const renderRow = ({ item: row }: { item: VaultRow }) => {
+    if (row.kind === "section") {
+      return (
+        <SectionHeader
+          title={row.title}
+          action={row.action}
+          onAction={row.onAction}
         />
-      ) : filtered.length === 0 ? (
-        <EmptyState
-          icon="search"
-          title={searching ? "Nothing matches" : "Nothing here yet"}
-          body={
-            searching
-              ? "Try a different name, username or website."
-              : "Add an item to this category, or switch filters."
-          }
-          actionLabel={searching ? "Clear search" : "Add an item"}
-          onAction={() => {
-            if (searching) setQuery("");
-            else router.push("/new");
-          }}
-          compact
-        />
-      ) : (
-        <>
-          {!searching && category === "all" && !activeGroup && favorites.length > 0 ? (
-            <>
-              <SectionHeader
-                title="Pinned"
-                action={favorites.length > 4 ? "View all" : undefined}
-                onAction={() => setCategory("favorites")}
-              />
-              {favorites.slice(0, 4).map((item) => (
-                <ItemRow
-                  key={`fav-${item.id}`}
-                  item={item}
-                  onPress={() => router.push(`/item/${item.id}`)}
-                  right={
-                    <Feather
-                      name="star"
-                      size={15}
-                      color={theme.colors.warning}
-                    />
-                  }
-                />
-              ))}
-            </>
-          ) : null}
+      );
+    }
+    if (row.kind === "letter") {
+      return (
+        <View style={styles.letterRow}>
+          <AppText variant="caption" color={theme.colors.accent}>
+            {row.letter}
+          </AppText>
+          <View
+            style={[styles.letterLine, { backgroundColor: theme.colors.border }]}
+          />
+          <AppText variant="caption" style={{ opacity: 0.6 }}>
+            {row.count}
+          </AppText>
+        </View>
+      );
+    }
 
-          {searching ? (
-            <SectionHeader
-              title={`${filtered.length} ${filtered.length === 1 ? "result" : "results"}`}
-            />
-          ) : null}
-
-          {groups.map((group) => (
-            <View key={group.letter}>
-              {!searching ? (
-                <View style={styles.letterRow}>
-                  <AppText variant="caption" color={theme.colors.accent}>
-                    {group.letter}
-                  </AppText>
-                  <View
-                    style={[
-                      styles.letterLine,
-                      { backgroundColor: theme.colors.border },
-                    ]}
-                  />
-                  <AppText variant="caption" style={{ opacity: 0.6 }}>
-                    {group.items.length}
-                  </AppText>
-                </View>
-              ) : null}
-
-              {group.items.map((item) => (
-                <ItemRow
-                  key={item.id}
-                  item={item}
-                  onPress={() => router.push(`/item/${item.id}`)}
-                  right={
-                    item.totp?.secret && item.type !== "totp" ? (
-                      <View
-                        style={[
-                          styles.twoFa,
-                          {
-                            backgroundColor: theme.colors.accentFaint,
-                            borderColor: theme.colors.border,
-                          },
-                        ]}
-                      >
-                        <Feather
-                          name="hash"
-                          size={11}
-                          color={theme.colors.accent}
-                        />
-                        <AppText
-                          variant="caption"
-                          color={theme.colors.accent}
-                          style={{ fontSize: 9 }}
-                        >
-                          2FA
-                        </AppText>
-                      </View>
-                    ) : item.favorite ? (
-                      <Feather
-                        name="star"
-                        size={14}
-                        color={theme.colors.warning}
-                      />
-                    ) : (
-                      <Feather
-                        name="chevron-right"
-                        size={17}
-                        color={theme.colors.textFaint}
-                      />
-                    )
-                  }
-                />
-              ))}
+    return (
+      <ItemRow
+        item={row.item}
+        onPress={() => router.push(`/item/${row.item.id}`)}
+        right={
+          row.favorite ? (
+            <Feather name="star" size={15} color={theme.colors.warning} />
+          ) : row.item.totp?.secret && row.item.type !== "totp" ? (
+            <View
+              style={[
+                styles.twoFa,
+                {
+                  backgroundColor: theme.colors.accentFaint,
+                  borderColor: theme.colors.border,
+                },
+              ]}
+            >
+              <Feather name="hash" size={11} color={theme.colors.accent} />
+              <AppText
+                variant="caption"
+                color={theme.colors.accent}
+                style={{ fontSize: 9 }}
+              >
+                2FA
+              </AppText>
             </View>
-          ))}
-        </>
-      )}
+          ) : row.item.favorite ? (
+            <Feather name="star" size={14} color={theme.colors.warning} />
+          ) : (
+            <Feather
+              name="chevron-right"
+              size={17}
+              color={theme.colors.textFaint}
+            />
+          )
+        }
+      />
+    );
+  };
+
+  return (
+    <Screen scroll={false}>
+      <FlatList
+        data={rows}
+        keyExtractor={(row) => row.key}
+        renderItem={renderRow}
+        ListHeaderComponent={header}
+        ListEmptyComponent={empty}
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          paddingHorizontal: theme.spacing.xl,
+          paddingBottom: 120,
+        }}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+        showsVerticalScrollIndicator={false}
+        initialNumToRender={12}
+        maxToRenderPerBatch={10}
+        windowSize={7}
+        refreshControl={
+          session?.token ? (
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={refresh}
+              tintColor={theme.colors.accent}
+              colors={[theme.colors.accent]}
+              progressBackgroundColor={theme.colors.card}
+            />
+          ) : undefined
+        }
+      />
     </Screen>
   );
 }

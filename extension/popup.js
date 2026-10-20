@@ -547,6 +547,24 @@ async function copyTotp() {
   }
 }
 
+async function sendFillMessage(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    const text = String(error?.message ?? "");
+    if (!/Receiving end does not exist|Could not establish connection/i.test(text)) {
+      throw error;
+    }
+    // Tabs opened before the extension was installed or reloaded do not have
+    // the content script yet. Inject it once and retry.
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"],
+    });
+    return chrome.tabs.sendMessage(tabId, message);
+  }
+}
+
 async function fillItem(id) {
   const item = state.items.find((entry) => entry.id === id);
   if (!item) return;
@@ -576,7 +594,7 @@ async function fillItem(id) {
       }
     }
 
-    const response = await chrome.tabs.sendMessage(tab.id, {
+    const response = await sendFillMessage(tab.id, {
       type: "flexivault:fill",
       username: item.username ?? "",
       password: item.password,

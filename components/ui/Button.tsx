@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useRef, type ComponentProps } from "react";
+import { useEffect, useRef, type ComponentProps } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -48,7 +48,24 @@ export function Button({
 }: ButtonProps) {
   const theme = useAppTheme();
   const scale = useRef(new Animated.Value(1)).current;
+  const contentOpacity = useRef(new Animated.Value(loading ? 0 : 1)).current;
+  const spinnerOpacity = useRef(new Animated.Value(loading ? 1 : 0)).current;
   const isDisabled = disabled || loading;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(contentOpacity, {
+        toValue: loading ? 0 : 1,
+        duration: 160,
+        useNativeDriver: true,
+      }),
+      Animated.timing(spinnerOpacity, {
+        toValue: loading ? 1 : 0,
+        duration: 160,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [loading, contentOpacity, spinnerOpacity]);
 
   const palette = {
     primary: {
@@ -87,7 +104,8 @@ export function Button({
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={label}
+        accessibilityLabel={loading ? `${label}, loading` : label}
+        accessibilityState={{ disabled: isDisabled, busy: loading }}
         testID={testID}
         disabled={isDisabled}
         onPressIn={() => {
@@ -126,10 +144,11 @@ export function Button({
           },
         ]}
       >
-        {loading ? (
-          <ActivityIndicator size="small" color={palette.foreground} />
-        ) : (
-          <View style={styles.content}>
+        <View style={styles.contentStack}>
+          <Animated.View
+            style={[styles.content, { opacity: contentOpacity }]}
+            pointerEvents="none"
+          >
             {icon ? (
               <Feather name={icon} size={17} color={palette.foreground} />
             ) : null}
@@ -139,8 +158,14 @@ export function Button({
             {iconRight ? (
               <Feather name={iconRight} size={17} color={palette.foreground} />
             ) : null}
-          </View>
-        )}
+          </Animated.View>
+          <Animated.View
+            style={[styles.loadingLayer, { opacity: spinnerOpacity }]}
+            pointerEvents="none"
+          >
+            <ActivityIndicator size="small" color={palette.foreground} />
+          </Animated.View>
+        </View>
       </Pressable>
     </Animated.View>
   );
@@ -231,6 +256,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 9,
+  },
+  contentStack: {
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "stretch",
+  },
+  loadingLayer: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: "center",
+    justifyContent: "center",
   },
   iconButton: {
     alignItems: "center",

@@ -396,9 +396,10 @@ use an EAS preview build; the seeded account and server URL work the same way.
 - No account deletion or password-change endpoint; manage the data directory
   manually. Rotating the master password would require re-encrypting the vault.
 - The extension cannot create or edit items and never writes to `/api/sync`.
-- Inline suggestions require an unlocked vault and a login form with a password
-  field. Fields inside a page's own shadow DOM, iframes, split one-character OTP
-  boxes, and card/identity/CVC fields are not suggested.
+- Inline suggestions require an unlocked vault and a login field. Fields inside
+  open shadow roots and email-only first-step logins are supported; closed shadow
+  roots, iframes, split one-character OTP boxes, and card/identity/CVC fields are
+  not suggested.
 - Card/identity autofill is not implemented; only login credentials are filled.
 - iOS QR scanning is not available in the current build; use the paste or manual
   key path until the iOS scanner is added. Android uses the ZXing decoder.

@@ -78,9 +78,11 @@ function area() {
 const localArea = area();
 const sessionArea = area();
 const sentMessages = [];
+const injectedScripts = [];
 const openedUrls = [];
 const copied = [];
 let activeTabUrl = "https://acme.test/login";
+let failNextSend = false;
 
 globalThis.chrome = {
   storage: {
@@ -98,12 +100,24 @@ globalThis.chrome = {
       return [{ id: 7, url: activeTabUrl }];
     },
     async sendMessage(tabId, message) {
+      if (failNextSend) {
+        failNextSend = false;
+        throw new Error(
+          "Could not establish connection. Receiving end does not exist."
+        );
+      }
       sentMessages.push({ tabId, message });
       return { ok: true, filled: 2 };
     },
     async create({ url }) {
       openedUrls.push(url);
       return { id: 8 };
+    },
+  },
+  scripting: {
+    async executeScript(details) {
+      injectedScripts.push(details);
+      return [];
     },
   },
 };
@@ -350,13 +364,21 @@ try {
   assert.equal(sentMessages[0].message.password, "s3cret-value");
   pass("autofill sends credentials to the content script");
 
+  await waitFor(() => bodyText().includes("Filled 2 fields"), "filled toast");
+  failNextSend = true;
+  click('[data-action="fill"]');
+  await waitFor(() => injectedScripts.length === 1, "content script injection");
+  assert.deepEqual(injectedScripts[0].files, ["content.js"]);
+  assert.equal(sentMessages.length, 2, "the fill retries after injection");
+  pass("autofill injects the content script into tabs opened before install");
+
   activeTabUrl = "https://evil.test/login";
   click('[data-action="fill"]');
   await waitFor(
     () => query("#toast")?.textContent?.includes("saved for"),
     "blocked autofill toast"
   );
-  assert.equal(sentMessages.length, 1, "mismatched host must not receive credentials");
+  assert.equal(sentMessages.length, 2, "mismatched host must not receive credentials");
   activeTabUrl = "https://acme.test/login";
   pass("autofill refuses a tab whose hostname does not match the saved site");
 

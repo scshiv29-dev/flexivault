@@ -1,6 +1,6 @@
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { View } from "react-native";
+import { Keyboard, View } from "react-native";
 
 import { AuthShell } from "@/components/auth/AuthShell";
 import { AppText } from "@/components/ui/AppText";
@@ -35,6 +35,7 @@ export default function CreateVaultScreen() {
       setError("The two passwords do not match.");
       return;
     }
+    Keyboard.dismiss();
     setLoading(true);
     try {
       await createVault(password);

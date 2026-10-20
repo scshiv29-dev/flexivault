@@ -25,10 +25,13 @@ class AutofillAuthActivity : FragmentActivity() {
     fun canAuthenticate(context: Context): Boolean {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         val manager = BiometricManager.from(context)
-        return manager.canAuthenticate(
-          BiometricManager.Authenticators.BIOMETRIC_STRONG or
-            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        val biometrics = manager.canAuthenticate(
+          BiometricManager.Authenticators.BIOMETRIC_STRONG
         ) == BiometricManager.BIOMETRIC_SUCCESS
+        val credential = manager.canAuthenticate(
+          BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        ) == BiometricManager.BIOMETRIC_SUCCESS
+        return biometrics || credential
       }
       val keyguard = context.getSystemService(KeyguardManager::class.java)
       return keyguard?.isDeviceSecure == true
@@ -59,10 +62,21 @@ class AutofillAuthActivity : FragmentActivity() {
     }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-      promptBiometric()
+      if (canUseBiometrics()) {
+        promptBiometric()
+      } else {
+        promptDeviceCredential()
+      }
     } else {
       promptDeviceCredential()
     }
+  }
+
+  private fun canUseBiometrics(): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
+    return BiometricManager.from(this).canAuthenticate(
+      BiometricManager.Authenticators.BIOMETRIC_STRONG
+    ) == BiometricManager.BIOMETRIC_SUCCESS
   }
 
   private fun promptBiometric() {
@@ -76,7 +90,18 @@ class AutofillAuthActivity : FragmentActivity() {
         }
 
         override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-          cancel()
+          // Some OEMs report no usable biometric hardware even though the
+          // device has a PIN or pattern. Fall back to the keyguard instead of
+          // silently cancelling the fill.
+          if (
+            errorCode == BiometricPrompt.ERROR_NO_BIOMETRICS ||
+            errorCode == BiometricPrompt.ERROR_HW_NOT_PRESENT ||
+            errorCode == BiometricPrompt.ERROR_HW_UNAVAILABLE
+          ) {
+            promptDeviceCredential()
+          } else {
+            cancel()
+          }
         }
       },
     )

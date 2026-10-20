@@ -1,6 +1,6 @@
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { View } from "react-native";
+import { Keyboard, View } from "react-native";
 
 import { AuthShell } from "@/components/auth/AuthShell";
 import { AppText } from "@/components/ui/AppText";
@@ -30,6 +30,7 @@ export default function ConnectScreen() {
 
   const test = async () => {
     if (!serverUrl) return;
+    Keyboard.dismiss();
     setTesting(true);
     setError(null);
     try {
@@ -45,6 +46,7 @@ export default function ConnectScreen() {
   };
 
   const submit = async () => {
+    Keyboard.dismiss();
     setLoading(true);
     setError(null);
     try {

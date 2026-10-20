@@ -180,6 +180,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<VaultStatus>("loading");
   const [items, setItems] = useState<VaultItem[]>([]);
   const [settings, setSettings] = useState<VaultSettings>(DEFAULT_SETTINGS);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [session, setSession] = useState<ServerSession | null>(null);
   const [serverProfile, setServerProfile] = useState<ServerProfile | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
@@ -331,9 +332,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setItems([]);
     setStatus("locked");
     setSyncStatus("idle");
-    clearAutofillCache().catch(() => {
-      // The native provider may not exist in Expo Go or on iOS.
-    });
+    // Keep the encrypted autofill cache. Each fill is still gated by the
+    // device-authentication activity, and clearing here made the system
+    // service go dark whenever auto-lock fired.
   }, []);
 
   const legacyItems = useCallback(() => legacyItemsFrom(legacyRef.current), []);
@@ -380,6 +381,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         settingsRef.current = initialSettings;
         if (cancelled) return;
         setSettings(initialSettings);
+        setSettingsLoaded(true);
 
         if (meta[META.serverUrl] && meta[META.serverEmail] && token) {
           const initialSession: ServerSession = {
@@ -448,13 +450,22 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (Platform.OS !== "android" || !hasNativeAutofill()) return;
+    // Do not clear the cache before persisted settings have loaded. The initial
+    // autofillEnabled value is false, so an early effect run would erase a
+    // perfectly good cache on every app launch.
+    if (!settingsLoaded) return;
 
-    if (status !== "unlocked" || !settings.autofillEnabled) {
+    if (!settings.autofillEnabled) {
       clearAutofillCache().catch(() => {
         // The cache is already absent, or the native module was removed.
       });
       return;
     }
+
+    // Locking, backgrounding, or restarting the app must not erase the cache.
+    // The native service only reads it, and every fill still opens the
+    // device-authentication activity. Rewrite it when the vault is unlocked.
+    if (status !== "unlocked") return;
 
     // Bulk changes (import, group rename) arrive in one React update. Debounce
     // the native encryption so we write one cache instead of one per item.
@@ -462,10 +473,10 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       configureAutofill(items).catch(() => {
         // Do not break unlock or editing if the native cache cannot be written.
       });
-    }, 500);
+    }, 300);
 
     return () => clearTimeout(timer);
-  }, [status, items, settings.autofillEnabled]);
+  }, [status, items, settings.autofillEnabled, settingsLoaded]);
 
   /* ----------------------------- onboarding ---------------------------- */
 
@@ -1044,6 +1055,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     const next = { ...settingsRef.current, autofillEnabled: value };
     settingsRef.current = next;
     setSettings(next);
+    setSettingsLoaded(true);
     await setMeta(META.autofillEnabled, value ? "1" : "0");
 
     if (!value) {
@@ -1157,6 +1169,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setLastSyncedAt(null);
     setSettings(DEFAULT_SETTINGS);
     settingsRef.current = DEFAULT_SETTINGS;
+    setSettingsLoaded(true);
 
     const legacy = await readLegacyEntries();
     legacyRef.current = legacy;

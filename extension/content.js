@@ -1,8 +1,22 @@
 /* Autofill bridge + inline, host-matched suggestions. */
 
+(() => {
+  // The popup can inject this file into tabs that were already open before the
+  // extension was installed or reloaded. A newer injection supersedes an older
+  // one instead of bailing out: after an extension update the old content
+  // script can still be alive in the tab, but its extension context is dead.
+  const CONTENT_INSTANCE = {};
+  globalThis.__flexivaultContentInstance = CONTENT_INSTANCE;
+  const isActiveInstance = () =>
+    globalThis.__flexivaultContentInstance === CONTENT_INSTANCE;
+
 const SUGGEST_HOST_ID = "flexivault-suggest-host";
 const SUGGEST_DELAY_MS = 80;
 const SUGGEST_MARGIN = 8;
+
+// An earlier instance may have left an open suggestion panel behind. Remove it
+// so the superseding instance starts from a clean DOM.
+document.getElementById(SUGGEST_HOST_ID)?.remove();
 
 const PALETTES = [
   ["#DDF6EC", "#0B8563"],
@@ -29,10 +43,65 @@ function initialOf(name) {
   return (clean[0] || "•").toUpperCase();
 }
 
+/**
+ * Query the light DOM and every open shadow root. Reddit, Salesforce and many
+ * other sites render login inputs inside web components; `document.querySelector`
+ * cannot see those fields.
+ */
+function deepQueryAll(root, selector) {
+  const results = [];
+  const roots = [root];
+  for (let index = 0; index < roots.length; index += 1) {
+    const scope = roots[index];
+    if (!scope?.querySelectorAll) continue;
+    for (const element of scope.querySelectorAll(selector)) results.push(element);
+    for (const element of scope.querySelectorAll("*")) {
+      if (element.shadowRoot) roots.push(element.shadowRoot);
+    }
+  }
+  return results;
+}
+
+function closestComposed(element, selector) {
+  let current = element;
+  while (current) {
+    if (typeof current.matches === "function" && current.matches(selector)) {
+      return current;
+    }
+    if (current.parentElement) {
+      current = current.parentElement;
+      continue;
+    }
+    const root = current.getRootNode?.();
+    current = root?.host ?? null;
+  }
+  return null;
+}
+
+function activeElementDeep() {
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  return active;
+}
+
+function fieldFromEvent(event) {
+  const path =
+    typeof event.composedPath === "function" ? event.composedPath() : [];
+  for (const node of path) {
+    if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement) {
+      return node;
+    }
+  }
+  const target = event.target;
+  if (!(target instanceof Element)) return null;
+  return target.closest("input, textarea");
+}
+
 function visible(element) {
   if (!element || element.disabled || element.readOnly) return false;
   const style = window.getComputedStyle(element);
   if (style.display === "none" || style.visibility === "hidden") return false;
+  if (style.opacity === "0") return false;
   const rect = element.getBoundingClientRect();
   if (rect.width < 8 || rect.height < 8) return false;
   return true;
@@ -54,10 +123,27 @@ function setValue(element, value) {
     element.value = value;
   }
 
-  element.dispatchEvent(new Event("input", { bubbles: true }));
-  element.dispatchEvent(new Event("change", { bubbles: true }));
+  element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+  element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
   element.blur();
   return true;
+}
+
+function labelText(element) {
+  const root = element.getRootNode?.();
+  const labelledBy = element.getAttribute("aria-labelledby");
+  const labelled = labelledBy
+    ? labelledBy
+        .split(/\s+/)
+        .map((id) => root?.getElementById?.(id)?.textContent ?? "")
+        .join(" ")
+    : "";
+  const labels = element.labels
+    ? Array.from(element.labels)
+        .map((label) => label.textContent)
+        .join(" ")
+    : "";
+  return [labels, labelled].filter(Boolean).join(" ");
 }
 
 function fieldHaystack(element) {
@@ -67,6 +153,10 @@ function fieldHaystack(element) {
     element.getAttribute("aria-label"),
     element.placeholder,
     element.getAttribute("autocomplete"),
+    element.getAttribute("data-testid"),
+    element.getAttribute("data-test-id"),
+    element.getAttribute("data-test"),
+    labelText(element),
   ]
     .filter(Boolean)
     .join(" ")
@@ -78,6 +168,21 @@ function looksLikeUsername(element) {
   if (element.type === "email") return true;
   if (element.autocomplete === "username") return true;
   return /user|email|login|account|identifier/.test(fieldHaystack(element));
+}
+
+function loginPageContext() {
+  const url = String(location.href ?? "").toLowerCase();
+  if (/(^|[/.])(login|signin|sign-in|auth|session|oauth|account)([/.?#]|$)/.test(url)) {
+    return true;
+  }
+  const title = String(
+    `${document.title ?? ""} ${
+      document.querySelector("h1, h2")?.textContent ?? ""
+    }`
+  ).toLowerCase();
+  return /\b(sign in|log in|login|create (an )?account|use your account)\b/.test(
+    title
+  );
 }
 
 function isSearchField(element) {
@@ -113,29 +218,48 @@ function isOtpField(element) {
 }
 
 function existingPasswordFields(scope) {
-  return Array.from(scope.querySelectorAll('input[type="password"]'))
+  return deepQueryAll(scope, 'input[type="password"]')
+    .filter((element) => element.isConnected !== false)
     .filter(visible)
     .filter((element) => element.autocomplete !== "new-password");
 }
 
 function findPasswordField(field) {
-  const form = field.closest("form");
-  const scope = form ?? document;
-  const fields = existingPasswordFields(scope);
+  const form = closestComposed(field, "form");
+  const formFields = form ? existingPasswordFields(form) : [];
+  const fields = form ? formFields : existingPasswordFields(document);
   if (fields.length === 0) return null;
 
-  const top = field.getBoundingClientRect().top;
-  const after = fields.filter(
-    (element) => element.getBoundingClientRect().top >= top
-  );
-  return after[0] ?? fields[0];
+  const fieldRect = field.getBoundingClientRect();
+  const ordered = fields
+    .map((element) => {
+      const rect = element.getBoundingClientRect();
+      const sameForm = Boolean(form && closestComposed(element, "form") === form);
+      const below = rect.top >= fieldRect.top ? 0 : 1;
+      return {
+        element,
+        score: (sameForm ? 0 : 1000) + below * 100 + Math.abs(rect.top - fieldRect.top),
+      };
+    })
+    .sort((left, right) => left.score - right.score);
+  return ordered[0]?.element ?? null;
 }
 
 function isLoginField(element) {
   if (!(element instanceof HTMLInputElement)) return false;
   if (element.type !== "email" && !looksLikeUsername(element)) return false;
   if (isSearchField(element)) return false;
-  return Boolean(findPasswordField(element));
+  if (findPasswordField(element)) return true;
+
+  // Google, Microsoft and many others split sign-in into an email page and a
+  // password page. Offer the saved username on the first step even though no
+  // password input exists yet.
+  if (!loginPageContext()) return false;
+  return (
+    element.autocomplete === "username" ||
+    element.type === "email" ||
+    /user|email|login|account|identifier/.test(fieldHaystack(element))
+  );
 }
 
 function fieldKind(element) {
@@ -178,9 +302,13 @@ function fieldKind(element) {
 }
 
 function findUsernameField(passwordField) {
-  const form = passwordField.closest("form");
-  const scope = form ?? document;
-  const fields = Array.from(scope.querySelectorAll("input")).filter(
+  const form = closestComposed(passwordField, "form");
+  const formFields = form
+    ? deepQueryAll(form, "input").filter(
+        (element) => element.type !== "password"
+      )
+    : [];
+  const fields = (form ? formFields : deepQueryAll(document, "input")).filter(
     (element) =>
       visible(element) &&
       !["password", "hidden", "submit", "button", "checkbox", "radio"].includes(
@@ -190,25 +318,45 @@ function findUsernameField(passwordField) {
       !isSearchField(element)
   );
 
-  const strong = fields.find(looksLikeUsername);
-  if (strong) return strong;
+  if (fields.length === 0) return null;
 
-  const passwordIndex = fields.indexOf(passwordField);
-  const before = passwordIndex === -1 ? fields : fields.slice(0, passwordIndex);
-  const textField = before
-    .reverse()
-    .find((element) => ["text", "email", "tel", ""].includes(element.type));
-  return textField ?? null;
+  const passwordRect = passwordField.getBoundingClientRect();
+  const scored = fields
+    .map((element) => {
+      const rect = element.getBoundingClientRect();
+      const sameForm = Boolean(
+        form && closestComposed(element, "form") === form
+      );
+      const strong = looksLikeUsername(element) ? 0 : 100;
+      const above =
+        rect.top <= passwordRect.top + 4
+          ? 0
+          : Math.abs(rect.top - passwordRect.top);
+      return {
+        element,
+        score: (sameForm ? 0 : 2000) + strong + above,
+      };
+    })
+    .sort((left, right) => left.score - right.score);
+  return scored[0]?.element ?? null;
 }
 
 function fill(username, password) {
   const passwordField = existingPasswordFields(document)[0];
 
   if (!passwordField) {
+    // Multi-step sign-in pages show only an email field at first. Fill that
+    // field instead of failing, so the user can continue to the next step.
+    const usernameField = deepQueryAll(document, "input").find(
+      (element) => visible(element) && isLoginField(element)
+    );
+    if (usernameField && username && setValue(usernameField, username)) {
+      return { ok: true, filled: 1 };
+    }
     return {
       ok: false,
       filled: 0,
-      message: "No existing-password field found on this page.",
+      message: "No login field found on this page.",
     };
   }
 
@@ -359,6 +507,9 @@ let filling = false;
 
 function ensurePanel() {
   if (panelHost?.isConnected && panel) return panel;
+
+  // Remove a panel left by a superseded content-script instance.
+  document.getElementById(SUGGEST_HOST_ID)?.remove();
 
   panelHost = document.createElement("div");
   panelHost.id = SUGGEST_HOST_ID;
@@ -545,6 +696,7 @@ function closePanel() {
 }
 
 function scheduleRequest(field, kind) {
+  if (!isActiveInstance()) return;
   clearTimeout(focusTimer);
   focusTimer = setTimeout(() => {
     void requestSuggestions(field, kind);
@@ -552,8 +704,9 @@ function scheduleRequest(field, kind) {
 }
 
 async function requestSuggestions(field, kind) {
+  if (!isActiveInstance()) return;
   if (filling) return;
-  if (!field?.isConnected || document.activeElement !== field) return;
+  if (!field?.isConnected || activeElementDeep() !== field) return;
   if (fieldKind(field) !== kind) return;
   if (activeField === field && panel && !panel.hidden) return;
   if (typeof chrome === "undefined" || typeof chrome.runtime?.sendMessage !== "function") {
@@ -577,6 +730,7 @@ async function requestSuggestions(field, kind) {
     return;
   }
 
+  if (!isActiveInstance()) return;
   if (token !== requestToken || activeField !== field || !field.isConnected) {
     return;
   }
@@ -589,6 +743,7 @@ async function requestSuggestions(field, kind) {
 }
 
 async function choose(item) {
+  if (!isActiveInstance()) return;
   const field = activeField;
   const kind = activeKind;
   if (!field || !field.isConnected || !item) return;
@@ -607,6 +762,7 @@ async function choose(item) {
       return;
     }
 
+    if (!isActiveInstance()) return;
     if (!response?.ok) return;
     if (kind === "otp") {
       setValue(field, String(response.code ?? ""));
@@ -623,9 +779,8 @@ async function choose(item) {
   }
 }
 
-function eligibleField(target) {
-  if (!(target instanceof Element)) return null;
-  const field = target.closest("input, textarea");
+function eligibleField(event) {
+  const field = fieldFromEvent(event);
   if (!field) return null;
   const kind = fieldKind(field);
   return kind ? { field, kind } : null;
@@ -634,7 +789,8 @@ function eligibleField(target) {
 document.addEventListener(
   "focusin",
   (event) => {
-    const found = eligibleField(event.target);
+    if (!isActiveInstance()) return;
+    const found = eligibleField(event);
     if (!found) return;
     scheduleRequest(found.field, found.kind);
   },
@@ -644,7 +800,8 @@ document.addEventListener(
 document.addEventListener(
   "click",
   (event) => {
-    const found = eligibleField(event.target);
+    if (!isActiveInstance()) return;
+    const found = eligibleField(event);
     if (!found) return;
     if (found.field === activeField && panel && !panel.hidden) return;
     scheduleRequest(found.field, found.kind);
@@ -655,10 +812,11 @@ document.addEventListener(
 document.addEventListener(
   "pointerdown",
   (event) => {
+    if (!isActiveInstance()) return;
     if (!panel || panel.hidden) return;
     const path = typeof event.composedPath === "function" ? event.composedPath() : [];
     if (path.includes(panel) || path.includes(panelHost)) return;
-    if (event.target === activeField) return;
+    if (fieldFromEvent(event) === activeField) return;
     closePanel();
   },
   true
@@ -667,11 +825,13 @@ document.addEventListener(
 document.addEventListener(
   "focusout",
   (event) => {
-    if (event.target !== activeField) return;
-    const field = event.target;
+    if (!isActiveInstance()) return;
+    const field = fieldFromEvent(event);
+    if (!field || field !== activeField) return;
     setTimeout(() => {
+      if (!isActiveInstance()) return;
       if (activeField !== field || panelHovered) return;
-      if (document.activeElement !== field) closePanel();
+      if (activeElementDeep() !== field) closePanel();
     }, 140);
   },
   true
@@ -680,9 +840,10 @@ document.addEventListener(
 document.addEventListener(
   "keydown",
   (event) => {
+    if (!isActiveInstance()) return;
     if (!event.isTrusted) return;
     if (!panel || panel.hidden || !activeField) return;
-    if (document.activeElement !== activeField) return;
+    if (activeElementDeep() !== activeField) return;
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -715,20 +876,24 @@ document.addEventListener(
 window.addEventListener(
   "scroll",
   () => {
+    if (!isActiveInstance()) return;
     if (panel && !panel.hidden && activeField) positionPanel(activeField);
   },
   true
 );
 
 window.addEventListener("resize", () => {
+  if (!isActiveInstance()) return;
   if (panel && !panel.hidden && activeField) positionPanel(activeField);
 });
 
 window.addEventListener("blur", () => {
+  if (!isActiveInstance()) return;
   if (panel && !panel.hidden) closePanel();
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!isActiveInstance()) return undefined;
   if (message?.type !== "flexivault:fill") return undefined;
 
   try {
@@ -743,3 +908,5 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   return true;
 });
+
+})();

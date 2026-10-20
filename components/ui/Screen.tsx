@@ -1,4 +1,5 @@
 import {
+  Animated,
   KeyboardAvoidingView,
   Platform,
   RefreshControl,
@@ -9,6 +10,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from "react-native";
+import { useEffect, useRef } from "react";
 import { SafeAreaView, type Edge } from "react-native-safe-area-context";
 
 import { useAppTheme } from "@/lib/theme";
@@ -33,6 +35,23 @@ export function Screen({
   refreshControl?: React.ReactElement<RefreshControlProps>;
 }) {
   const theme = useAppTheme();
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(10)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 260,
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateY, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [opacity, translateY]);
 
   const content = scroll ? (
     <ScrollView
@@ -56,7 +75,7 @@ export function Screen({
   const wrapped = keyboard ? (
     <KeyboardAvoidingView
       style={styles.flex}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 8 : 0}
     >
       {content}
@@ -74,7 +93,14 @@ export function Screen({
         style,
       ]}
     >
-      {wrapped}
+      <Animated.View
+        style={[
+          styles.flex,
+          { opacity, transform: [{ translateY }] },
+        ]}
+      >
+        {wrapped}
+      </Animated.View>
     </SafeAreaView>
   );
 }

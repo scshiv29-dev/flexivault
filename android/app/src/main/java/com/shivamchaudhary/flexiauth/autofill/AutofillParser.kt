@@ -8,7 +8,7 @@ import java.util.ArrayDeque
 
 data class AutofillFields(
   val usernameId: AutofillId?,
-  val passwordId: AutofillId,
+  val passwordId: AutofillId?,
   val webDomain: String?,
   val packageName: String?,
 )
@@ -21,6 +21,7 @@ object AutofillParser {
   fun parse(structure: AssistStructure): AutofillFields? {
     var usernameId: AutofillId? = null
     var firstUsernameId: AutofillId? = null
+    var lastUsernameId: AutofillId? = null
     var passwordId: AutofillId? = null
     var webDomain: String? = null
     var visited = 0
@@ -40,15 +41,19 @@ object AutofillParser {
         }
 
         val id = node.autofillId
-        if (id != null && node.visibility == View.VISIBLE && node.isEnabled) {
+        if (id != null && node.visibility == View.VISIBLE && node.isEnabled && !isButton(node)) {
           if (isPasswordField(node)) {
             if (passwordId == null) {
               passwordId = id
-              usernameId = usernameId ?: firstUsernameId
+              // The username is normally the last username-like field before
+              // the password. Never overwrite it with a later field (some
+              // pages place a submit button after the password).
+              usernameId = lastUsernameId ?: firstUsernameId
             }
           } else if (isUsernameField(node)) {
             if (firstUsernameId == null) firstUsernameId = id
-            usernameId = id
+            lastUsernameId = id
+            if (passwordId == null && usernameId == null) usernameId = id
           }
         }
 
@@ -58,13 +63,21 @@ object AutofillParser {
       }
     }
 
-    if (passwordId == null) return null
+    if (passwordId == null && usernameId == null && firstUsernameId == null) {
+      return null
+    }
     return AutofillFields(
-      usernameId = usernameId,
+      usernameId = usernameId ?: firstUsernameId,
       passwordId = passwordId,
       webDomain = webDomain,
       packageName = structure.activityComponent?.packageName,
     )
+  }
+
+  private fun isButton(node: AssistStructure.ViewNode): Boolean {
+    val className = node.className?.toString().orEmpty()
+    return className.contains("Button", ignoreCase = true) ||
+      className.contains("ImageButton", ignoreCase = true)
   }
 
   private fun isPasswordField(node: AssistStructure.ViewNode): Boolean {
@@ -98,10 +111,21 @@ object AutofillParser {
   }
 
   private fun fieldText(node: AssistStructure.ViewNode): String {
+    // Chrome exposes virtual web nodes with an HTML tag and attributes. Those
+    // names are often the only hint that a field is a login field.
+    val html = node.htmlInfo?.let { info ->
+      listOfNotNull(
+        info.tag,
+        info.attributes?.joinToString(" ") { attribute ->
+          "${attribute.first}=${attribute.second}"
+        },
+      ).joinToString(" ")
+    }
     return listOfNotNull(
       node.idEntry,
       node.hint,
       node.contentDescription?.toString(),
+      html,
     ).joinToString(" ")
   }
 

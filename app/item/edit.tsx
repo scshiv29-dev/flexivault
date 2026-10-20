@@ -3,7 +3,7 @@ import * as Crypto from "expo-crypto";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { Platform, Pressable, StyleSheet, View } from "react-native";
+import { Keyboard, Platform, Pressable, StyleSheet, View } from "react-native";
 
 import { AppText } from "@/components/ui/AppText";
 import { Button, LinkButton } from "@/components/ui/Button";
@@ -251,6 +251,7 @@ export default function EditItemScreen() {
       };
     }
 
+    Keyboard.dismiss();
     setSaving(true);
     try {
       if (existing) {

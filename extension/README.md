@@ -134,6 +134,7 @@ reviewer demo account. Firefox is not supported yet.
 | --- | --- |
 | `storage` | Config, encrypted cache, session key/token |
 | `activeTab` | Read the active URL for popup autofill and message the page after a click |
+| `scripting` | Inject the content script into a tab that was already open before the extension was installed or reloaded, only after an explicit fill click |
 | `clipboardWrite` | Copy secrets on demand |
 | `http://*/*`, `https://*/*` | Inject the autofill content script; the background worker makes no network requests |
 
@@ -148,9 +149,10 @@ only reacts to focus on password, username and one-time-code fields.
 - Sync is pull-only: mobile pushes, the extension refreshes. It never resolves
   conflicts or writes to `/api/sync`.
 - Inline suggestions need an unlocked vault. The content script recognises
-  normal login forms with a password field and common one-time-code inputs; it
-  does not see fields inside a page's own shadow DOM (open or closed), inside
-  iframes, or split one-character OTP boxes.
+  login, username and common one-time-code fields, including fields inside open
+  shadow roots and email-only first-step sign-in pages. It cannot see closed
+  shadow roots, fields inside iframes, split one-character OTP boxes, or
+  card/identity/CVC fields.
 - Inline suggestions are automatic, not a browser-native autofill provider, so
   they do not appear in Chrome's own autofill menu or on PDFs/browser UI.
 - Host matching is suffix-based, not a public-suffix check. Inline suggestions

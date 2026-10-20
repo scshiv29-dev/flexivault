@@ -1,6 +1,7 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from "react-native";
+import { useEffect, useRef } from "react";
+import { Animated, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAppTheme } from "@/lib/theme";
@@ -20,6 +21,23 @@ export function AuthShell({
 }) {
   const theme = useAppTheme();
   const router = useRouter();
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(10)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 280,
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateY, {
+        toValue: 0,
+        duration: 320,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [opacity, translateY]);
 
   const content = (
     <ScrollView
@@ -87,17 +105,24 @@ export function AuthShell({
         ]}
       />
       <SafeAreaView style={styles.flex}>
-        {keyboard ? (
-          <KeyboardAvoidingView
-            style={styles.flex}
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
-            keyboardVerticalOffset={Platform.OS === "ios" ? 8 : 0}
-          >
-            {content}
-          </KeyboardAvoidingView>
-        ) : (
-          content
-        )}
+        <Animated.View
+          style={[
+            styles.flex,
+            { opacity, transform: [{ translateY }] },
+          ]}
+        >
+          {keyboard ? (
+            <KeyboardAvoidingView
+              style={styles.flex}
+              behavior={Platform.OS === "ios" ? "padding" : undefined}
+              keyboardVerticalOffset={Platform.OS === "ios" ? 8 : 0}
+            >
+              {content}
+            </KeyboardAvoidingView>
+          ) : (
+            content
+          )}
+        </Animated.View>
       </SafeAreaView>
     </LinearGradient>
   );

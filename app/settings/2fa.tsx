@@ -2,7 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Keyboard, Pressable, StyleSheet, View } from "react-native";
 
 import { AppText } from "@/components/ui/AppText";
 import { Button } from "@/components/ui/Button";
@@ -40,6 +40,7 @@ export default function ServerTwoFactorScreen() {
   const enabled = Boolean(session?.totpEnabled ?? serverProfile?.totpEnabled);
 
   const begin = async () => {
+    Keyboard.dismiss();
     setStarting(true);
     setError(null);
     try {
@@ -54,6 +55,7 @@ export default function ServerTwoFactorScreen() {
   };
 
   const enable = async () => {
+    Keyboard.dismiss();
     setBusy(true);
     setError(null);
     try {
@@ -67,6 +69,7 @@ export default function ServerTwoFactorScreen() {
   };
 
   const disable = async () => {
+    Keyboard.dismiss();
     setBusy(true);
     setError(null);
     try {

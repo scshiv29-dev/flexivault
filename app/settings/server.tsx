@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, View } from "react-native";
+import { Keyboard, Pressable, View } from "react-native";
 
 import { AppText } from "@/components/ui/AppText";
 import { Button } from "@/components/ui/Button";
@@ -59,6 +59,7 @@ export default function ServerSettingsScreen() {
 
   const test = async () => {
     if (!url.trim()) return;
+    Keyboard.dismiss();
     setTesting(true);
     setError(null);
     setInfo(null);
@@ -78,6 +79,7 @@ export default function ServerSettingsScreen() {
   };
 
   const submit = async (replaceLocal = false) => {
+    Keyboard.dismiss();
     setBusy(true);
     resetMessages();
 

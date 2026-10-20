@@ -25,6 +25,10 @@ const dom = new JSDOM(
        <form id="otp">
          <input id="code" name="code" autocomplete="one-time-code" inputmode="numeric" maxlength="6" />
        </form>
+     <form id="email-only">
+       <input id="email-only-input" type="email" name="email" autocomplete="username" />
+     </form>
+     <div id="shadow-host"></div>
      </body>
    </html>`,
   {
@@ -35,6 +39,18 @@ const dom = new JSDOM(
 );
 
 const { window } = dom;
+
+// A web-component login rendered inside an open shadow root, like Reddit's
+// faceplate inputs. The content script must discover and fill these fields even
+// though `document.querySelector` cannot see them.
+const shadowHost = window.document.getElementById("shadow-host");
+const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+shadowRoot.innerHTML = `
+  <form id="shadow-form">
+    <input id="shadow-email" type="email" name="email" autocomplete="username" />
+    <input id="shadow-password" type="password" name="password" />
+  </form>
+`;
 
 // The UI lives in a closed shadow root. Capture it the way a test harness
 // would, while asserting below that the page cannot reach it.
@@ -64,6 +80,7 @@ window.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientR
 };
 
 let listener = null;
+const listeners = [];
 const fillRequests = [];
 const suggestionItems = {
   login: [{ id: "login_1", name: "Acme Portal", username: "ada@example.com" }],
@@ -81,6 +98,7 @@ window.chrome = {
   runtime: {
     onMessage: {
       addListener(handler) {
+        listeners.push(handler);
         listener = handler;
       },
     },
@@ -219,8 +237,35 @@ await focusField(window.document.getElementById("cvc"));
 assert.equal(fillRequests.length, 2, "card security fields are ignored");
 assert.equal(suggestionHost(), null, "card security fields show no suggestions");
 
+// Login inputs inside an open shadow root are discovered through composed
+// focus events and filled without touching the page's light DOM.
+const shadowEmail = shadowRoot.getElementById("shadow-email");
+await focusField(shadowEmail);
+await chooseFirstSuggestion();
+
+assert.equal(fillRequests.length, 3);
+assert.equal(fillRequests[2].kind, "login");
+assert.equal(shadowEmail.value, "ada@example.com");
+assert.equal(shadowRoot.getElementById("shadow-password").value, "s3cret-value");
+
+// Google's first sign-in step has only an email field. It must still offer the
+// saved username instead of waiting for a password input.
+const emailOnly = window.document.getElementById("email-only-input");
+await focusField(emailOnly);
+await chooseFirstSuggestion();
+
+assert.equal(fillRequests.length, 4);
+assert.equal(emailOnly.value, "ada@example.com");
+assert.equal(
+  window.document.querySelectorAll('#email-only input[type="password"]').length,
+  0,
+  "the email-only step fills only the username"
+);
+
 // A signup form alone must not receive an existing password.
 window.document.getElementById("login").remove();
+window.document.getElementById("shadow-host").remove();
+window.document.getElementById("email-only").remove();
 const signupOnly = send({
   type: "flexivault:fill",
   username: "ada@example.com",
@@ -229,6 +274,40 @@ const signupOnly = send({
 assert.equal(signupOnly.response.ok, false);
 assert.equal(signupOnly.response.filled, 0);
 assert.equal(window.document.getElementById("new-password").value, "");
+
+// The popup re-injects content.js after an extension update or reload. A tab
+// can still hold the previous instance, so the new instance must supersede it
+// instead of bailing out on a global "already loaded" flag. The old bridge must
+// become inert, and the new one must fill normally.
+const reinjectForm = window.document.createElement("form");
+reinjectForm.innerHTML = `
+  <input id="late-email" type="email" name="email" autocomplete="username" />
+  <input id="late-password" type="password" name="password" />
+`;
+window.document.body.append(reinjectForm);
+
+const staleListener = listener;
+const listenerCount = listeners.length;
+window.eval(source);
+assert.equal(
+  listeners.length,
+  listenerCount + 1,
+  "re-injection registers a fresh bridge"
+);
+assert.equal(
+  staleListener({ type: "flexivault:fill", username: "x", password: "y" }, {}, () => {}),
+  undefined,
+  "the superseded bridge is inert"
+);
+
+const reinjectedFill = send({
+  type: "flexivault:fill",
+  username: "ada@example.com",
+  password: "s3cret-value",
+});
+assert.equal(reinjectedFill.response.ok, true);
+assert.equal(window.document.getElementById("late-email").value, "ada@example.com");
+assert.equal(window.document.getElementById("late-password").value, "s3cret-value");
 
 console.log("Content-script checks passed.");
 dom.window.close();

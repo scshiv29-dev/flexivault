@@ -1,7 +1,6 @@
 package com.shivamchaudhary.flexiauth.autofill
 
 import android.content.Context
-import android.os.SystemClock
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -24,7 +23,8 @@ data class AutofillLogin(
 
 /**
  * Stores a login-only autofill cache encrypted with a key that never leaves the
- * Android Keystore. The cache is deleted on lock/reset and expires after 12h.
+ * Android Keystore. The cache survives app locks and device reboots, and expires
+ * after 30 days. It is cleared when autofill is disabled or the vault is reset.
  *
  * The cache is decrypted by the autofill service, but no dataset is returned
  * without [AutofillAuthActivity] completing a device authentication prompt.
@@ -32,10 +32,12 @@ data class AutofillLogin(
 object AutofillCache {
   private const val PREFS = "flexivault_autofill"
   private const val KEY_PAYLOAD = "payload"
+  private const val KEY_CREATED_AT = "createdAt"
   private const val KEY_CREATED_ELAPSED = "createdElapsed"
   private const val KEY_ALIAS = "flexivault.autofill.v1"
   private const val KEYSTORE = "AndroidKeyStore"
-  private const val TTL_MS = 12L * 60L * 60L * 1000L
+  private const val TTL_MS = 30L * 24L * 60L * 60L * 1000L
+  private const val CLOCK_SKEW_MS = 10L * 60L * 1000L
   private const val MAX_LOGINS = 5000
   private const val MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
   private val PACKAGE_PATTERN =
@@ -66,7 +68,8 @@ object AutofillCache {
     val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     val stored = prefs.edit()
       .putString(KEY_PAYLOAD, encrypted)
-      .putLong(KEY_CREATED_ELAPSED, SystemClock.elapsedRealtime())
+      .putLong(KEY_CREATED_AT, System.currentTimeMillis())
+      .remove(KEY_CREATED_ELAPSED)
       .commit()
     check(stored) { "Could not persist the autofill cache." }
   }
@@ -75,13 +78,27 @@ object AutofillCache {
   fun read(context: Context): List<AutofillLogin> {
     val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     val payload = prefs.getString(KEY_PAYLOAD, null) ?: return emptyList()
-    val createdAt = prefs.getLong(KEY_CREATED_ELAPSED, -1L)
-    val now = SystemClock.elapsedRealtime()
 
-    // elapsedRealtime() starts at zero on boot. A smaller value than the write
-    // means the device rebooted, so treat the cache as stale even if the wall
-    // clock moved backwards or the TTL has not elapsed yet.
-    if (createdAt < 0L || now < createdAt || now - createdAt > TTL_MS) {
+    // The previous cache used elapsedRealtime(), which made every reboot look
+    // like an expired cache. Adopt existing payloads once, then use wall time.
+    var createdAt = prefs.getLong(KEY_CREATED_AT, -1L)
+    if (createdAt <= 0L) {
+      val legacy = prefs.getLong(KEY_CREATED_ELAPSED, -1L)
+      if (legacy >= 0L) {
+        createdAt = System.currentTimeMillis()
+        prefs.edit()
+          .putLong(KEY_CREATED_AT, createdAt)
+          .remove(KEY_CREATED_ELAPSED)
+          .apply()
+      }
+    }
+
+    val now = System.currentTimeMillis()
+    if (
+      createdAt <= 0L ||
+      now + CLOCK_SKEW_MS < createdAt ||
+      now - createdAt > TTL_MS
+    ) {
       clear(context)
       return emptyList()
     }
@@ -106,6 +123,7 @@ object AutofillCache {
       .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
       .edit()
       .remove(KEY_PAYLOAD)
+      .remove(KEY_CREATED_AT)
       .remove(KEY_CREATED_ELAPSED)
       .apply()
   }

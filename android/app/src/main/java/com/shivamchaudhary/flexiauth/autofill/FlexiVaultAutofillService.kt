@@ -46,7 +46,12 @@ class FlexiVaultAutofillService : AutofillService() {
       val response = FillResponse.Builder()
       var added = 0
       matches.forEachIndexed { index, login ->
-        val dataset = buildDataset(login, fields, index)
+        val dataset = try {
+          buildDataset(login, fields, index)
+        } catch (_: Exception) {
+          // One malformed presentation must not discard every other match.
+          null
+        }
         if (dataset != null) {
           response.addDataset(dataset)
           added += 1
@@ -82,13 +87,19 @@ class FlexiVaultAutofillService : AutofillService() {
     }
 
     val builder = Dataset.Builder(presentation)
+    var values = 0
     fields.usernameId?.let { id ->
       val username = login.username?.takeIf { it.isNotBlank() }
       if (username != null) {
         builder.setValue(id, AutofillValue.forText(username), presentation)
+        values += 1
       }
     }
-    builder.setValue(fields.passwordId, AutofillValue.forText(login.password), presentation)
+    fields.passwordId?.let { id ->
+      builder.setValue(id, AutofillValue.forText(login.password), presentation)
+      values += 1
+    }
+    if (values == 0) return null
 
     val intent = Intent(this, AutofillAuthActivity::class.java).apply {
       putExtra(AutofillAuthActivity.EXTRA_LOGIN_ID, login.id)
