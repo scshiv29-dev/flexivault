@@ -1,5 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
+import Constants from "expo-constants";
 import { useRouter } from "expo-router";
 import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import {
@@ -502,7 +503,7 @@ export default function SettingsScreen() {
               subtitle={
                 autofillAvailable
                   ? autofillDeviceEnabled
-                    ? "Fill logins in other apps after a biometric check"
+                    ? "Fill logins in apps and browsers after a device check"
                     : "Cache logins, then choose FlexiVault in Android settings"
                   : "Install the native Android build; Expo Go cannot provide autofill"
               }
@@ -527,6 +528,18 @@ export default function SettingsScreen() {
               />
             ) : null}
             {autofillAvailable && settings.autofillEnabled ? (
+              <Callout
+                tone={autofillDeviceEnabled ? "success" : "warning"}
+                title={autofillDeviceEnabled ? "Autofill is ready" : "Finish autofill setup"}
+                body={
+                  autofillDeviceEnabled
+                    ? "Android shows the biometric or screen-lock prompt over the app being filled, then fills the form. No overlay permission is needed. Native apps match by app name; add an Android package to a login for an exact match."
+                    : "Choose FlexiVault in Android autofill settings. The device prompt appears over the app being filled, then fills the form. No overlay permission is needed."
+                }
+                style={{ marginTop: 10 }}
+              />
+            ) : null}
+            {autofillAvailable && settings.autofillEnabled && autofillDeviceEnabled ? (
               <Callout
                 tone="info"
                 title="Using Chrome?"
@@ -636,7 +649,7 @@ export default function SettingsScreen() {
         <SettingRow icon="shield" title="Encryption" right={<AppText variant="small">AES-256-GCM</AppText>} />
         <SettingRow icon="hash" title="Key derivation" right={<AppText variant="small">PBKDF2 · 210k</AppText>} />
         <SettingRow icon="cloud" title="Sync" right={<AppText variant="small">Self-hosted</AppText>} />
-        <SettingRow icon="info" title="Version" right={<AppText variant="small">1.0.0</AppText>} last />
+        <SettingRow icon="info" title="Version" right={<AppText variant="small">{Constants.expoConfig?.version ?? "1.0.2"}</AppText>} last />
       </Card>
 
       <AppText

@@ -37,9 +37,11 @@ The mobile app works entirely offline. A server only adds multi-device sync.
 ### Mobile app
 
 - Five item types: login, secure note, payment card, identity, authenticator.
-- TOTP with live progress rings, native Android QR scanning (ZXing),
-  `otpauth://` paste/import, manual secrets, and automatic migration of the
-  legacy `flexiauth` authenticator DB. iOS/web use the paste and manual paths.
+- TOTP with live progress rings, native Android QR scanning and gallery/screenshot
+  image import (ZXing), `otpauth://` paste/import, manual secrets, and automatic
+  migration of the legacy `flexiauth` authenticator DB. Browsers with
+  `BarcodeDetector` can decode an uploaded QR image; iOS and other browsers use
+  the paste and manual paths.
 - Password and passphrase generator, entropy estimate and strength meter.
 - CSV and Bitwarden JSON import from common password managers, with a preview,
   folder preservation and invalid-TOTP warnings.
@@ -49,9 +51,10 @@ The mobile app works entirely offline. A server only adds multi-device sync.
 - Groups, favorites, search and type filters.
 - Biometric unlock (Face ID / fingerprint) with the derived key in the device
   keychain, background auto-lock (5/15/30 minutes or never), and lock-now.
-- Android system autofill for browser and native-app login forms: hostname or
-  package matching, a login-only encrypted cache, and a biometric/PIN check for
-  every fill. Requires a native APK; iOS autofill is not implemented.
+- Android system autofill for browser and native-app login forms: hostname
+  matching, explicit package matching plus app-label/token inference, a
+  login-only encrypted cache, and a biometric/PIN check that appears over the
+  app being filled. Requires a native APK; iOS autofill is not implemented.
 - Encrypted backup export (ciphertext + KDF parameters) and device reset.
 - Optional self-hosted sync with revision conflict detection.
 - Optional server-side TOTP as a second factor for sign-in.
@@ -150,8 +153,8 @@ npm run android        # build and install the native development app
 `npm run android` starts Metro after installing the debug build. Rebuild after
 changing native dependencies; JavaScript-only changes hot-reload normally.
 Expo Go 57 is enough for everyday JavaScript work, but the native build is
-required for system autofill and Android QR scanning, and it is the right target
-for 16 KB page-size and standalone checks.
+required for system autofill and Android QR scanning/image import, and it is the
+right target for 16 KB page-size and standalone checks.
 
 On first launch:
 
@@ -401,8 +404,11 @@ use an EAS preview build; the seeded account and server URL work the same way.
   roots, iframes, split one-character OTP boxes, and card/identity/CVC fields are
   not suggested.
 - Card/identity autofill is not implemented; only login credentials are filled.
-- iOS QR scanning is not available in the current build; use the paste or manual
-  key path until the iOS scanner is added. Android uses the ZXing decoder.
+- iOS QR scanning and image import are not available in the current build; use
+  the paste or manual key path until the iOS scanner is added. Android uses the
+  ZXing decoder for both the camera and images. On the web, image import needs a
+  browser that exposes `BarcodeDetector`; otherwise paste the link or enter the
+  key.
 - The UI is portrait-first and the extension is Chromium-only (MV3, Chrome 116+).
 - Import copies items; it does not deduplicate repeated imports or connect to
   another password manager's API.

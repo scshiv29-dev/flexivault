@@ -3,6 +3,8 @@ package com.shivamchaudhary.flexiauth.autofill
 import android.app.PendingIntent
 import android.app.assist.AssistStructure
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.CancellationSignal
 import android.service.autofill.AutofillService
 import android.service.autofill.Dataset
@@ -12,7 +14,6 @@ import android.service.autofill.FillResponse
 import android.service.autofill.SaveCallback
 import android.service.autofill.SaveRequest
 import android.view.autofill.AutofillValue
-import android.widget.RemoteViews
 import com.shivamchaudhary.flexiauth.R
 
 class FlexiVaultAutofillService : AutofillService() {
@@ -38,9 +39,24 @@ class FlexiVaultAutofillService : AutofillService() {
       val logins = AutofillCache.read(this)
       if (logins.isEmpty()) return callback.onSuccess(null)
 
-      val matches = logins.filter { login ->
-        matchesTarget(login, fields.webDomain, fields.packageName)
-      }.take(8)
+      // Resolve the app label for native apps, including WebView-based ones
+      // that expose a web domain. Browsers are matched by web domain only; if
+      // a browser does not expose one, package-based guesses would surface
+      // unrelated logins on every page.
+      val isBrowser = AutofillMatcher.isBrowserPackage(fields.packageName)
+      if (isBrowser && fields.webDomain.isNullOrBlank()) {
+        return callback.onSuccess(null)
+      }
+      val appLabel = if (isBrowser) null else resolveAppLabel(fields.packageName)
+      val targetTokens = AutofillMatcher.targetTokens(fields.packageName, appLabel)
+      val matches = logins
+        .map { login ->
+          login to AutofillMatcher.score(login, fields.webDomain, fields.packageName, targetTokens)
+        }
+        .filter { it.second > 0 }
+        .sortedByDescending { it.second }
+        .take(8)
+        .map { it.first }
       if (matches.isEmpty()) return callback.onSuccess(null)
 
       val response = FillResponse.Builder()
@@ -76,15 +92,7 @@ class FlexiVaultAutofillService : AutofillService() {
     fields: AutofillFields,
     index: Int,
   ): Dataset? {
-    val presentation = RemoteViews(packageName, R.layout.autofill_dataset).apply {
-      setTextViewText(R.id.autofill_title, login.name)
-      setTextViewText(
-        R.id.autofill_subtitle,
-        listOfNotNull(login.username?.takeIf { it.isNotBlank() }, "FlexiVault")
-          .joinToString(" · ")
-      )
-      setImageViewResource(R.id.autofill_icon, R.mipmap.ic_launcher)
-    }
+    val presentation = AutofillPresentation.build(this, login)
 
     val builder = Dataset.Builder(presentation)
     var values = 0
@@ -104,35 +112,46 @@ class FlexiVaultAutofillService : AutofillService() {
     val intent = Intent(this, AutofillAuthActivity::class.java).apply {
       putExtra(AutofillAuthActivity.EXTRA_LOGIN_ID, login.id)
       putExtra(AutofillAuthActivity.EXTRA_LOGIN_NAME, login.name)
-      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+      putExtra(AutofillAuthActivity.EXTRA_USERNAME_ID, fields.usernameId)
+      putExtra(AutofillAuthActivity.EXTRA_PASSWORD_ID, fields.passwordId)
+      // Deliberately no FLAG_ACTIVITY_NEW_TASK: the auth activity must stay in
+      // the caller's task so it appears over the app being filled and finishing
+      // returns there. NEW_TASK would bring FlexiVault's own task forward.
     }
     val pendingIntent = PendingIntent.getActivity(
       this,
       5000 + index,
       intent,
-      PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      PendingIntent.FLAG_CANCEL_CURRENT or
+        (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          // The platform fills in the assist structure and client state, and
+          // needs to add the authenticated dataset to the result.
+          PendingIntent.FLAG_MUTABLE
+        } else {
+          0
+        }),
     )
     builder.setAuthentication(pendingIntent.intentSender)
     return builder.build()
   }
 
-  private fun matchesTarget(
-    login: AutofillLogin,
-    domain: String?,
-    targetPackage: String?,
-  ): Boolean {
-    if (
-      targetPackage != null &&
-      login.packages.any { it.equals(targetPackage, ignoreCase = true) }
-    ) {
-      return true
-    }
-    if (domain.isNullOrBlank()) return false
-    val target = domain.lowercase().trim().trimEnd('.')
-    return login.hosts.any { saved ->
-      val host = saved.lowercase().trim().trimEnd('.')
-      if (host != "localhost" && !host.contains('.')) return@any false
-      target == host || target.endsWith(".$host")
+  private fun resolveAppLabel(targetPackage: String?): String? {
+    if (targetPackage.isNullOrBlank() || targetPackage == packageName) return null
+    return try {
+      val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        packageManager.getApplicationInfo(
+          targetPackage,
+          PackageManager.ApplicationInfoFlags.of(0L),
+        )
+      } else {
+        @Suppress("DEPRECATION")
+        packageManager.getApplicationInfo(targetPackage, 0)
+      }
+      packageManager.getApplicationLabel(info).toString()
+    } catch (_: Exception) {
+      // Package visibility or a missing label must not block package-token
+      // matching.
+      null
     }
   }
 }

@@ -80,6 +80,7 @@ export function buildAutofillPayload(items: VaultItem[]): AutofillPayload {
     if (item.deletedAt || item.type !== "login") continue;
     const password = item.password ?? "";
     if (!password) continue;
+    if (!item.name.trim()) continue;
     if (seen.has(item.id)) continue;
 
     const hosts = Array.from(
@@ -96,8 +97,9 @@ export function buildAutofillPayload(items: VaultItem[]): AutofillPayload {
       new Set((item.androidPackages ?? []).filter((name) => PACKAGE_PATTERN.test(name)))
     ).slice(0, MAX_ANDROID_PACKAGES);
 
-    if (hosts.length === 0 && packages.length === 0) continue;
-
+    // Keep logins without a website or package too. Android can match them to
+    // a native app by the app label or package tokens (for example a "Reddit"
+    // login and the Reddit app). Browser matching still requires a host.
     seen.add(item.id);
     logins.push({
       id: item.id,

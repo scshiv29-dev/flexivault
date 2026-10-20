@@ -418,7 +418,7 @@ export default function EditItemScreen() {
               placeholder="com.example.app"
               icon="smartphone"
               autoCapitalize="none"
-              hint="Used for autofill in native Android apps. Find it in the app's Play Store URL after id=, or in Android app info."
+              hint="Optional. FlexiVault matches native apps by app name automatically. Add a package like com.example.app for an exact match. Find it after id= in the app's Play Store URL."
             />
           </>
         ) : null}

@@ -107,6 +107,15 @@ object AutofillParser {
     ) {
       return true
     }
+
+    val variation = node.inputType and InputType.TYPE_MASK_VARIATION
+    if (
+      variation == InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS ||
+      variation == InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS
+    ) {
+      return true
+    }
+
     return USERNAME_TEXT.containsMatchIn(fieldText(node))
   }
 

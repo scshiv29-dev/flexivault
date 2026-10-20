@@ -113,8 +113,12 @@ object AutofillCache {
     }
   }
 
+  fun find(context: Context, id: String): AutofillLogin? {
+    return read(context).firstOrNull { login -> login.id == id }
+  }
+
   fun contains(context: Context, id: String): Boolean {
-    return read(context).any { login -> login.id == id }
+    return find(context, id) != null
   }
 
   @Synchronized
@@ -180,7 +184,9 @@ object AutofillCache {
         .filter { PACKAGE_PATTERN.matches(it) }
         .distinct()
 
-      if (hosts.isEmpty() && packages.isEmpty()) continue
+      // Name-only logins are intentional: the service can match them to a
+      // native app by the app label or package tokens without requiring the
+      // user to find and enter the package name.
       result.add(AutofillLogin(id, name, username, password, hosts, packages))
     }
     return result

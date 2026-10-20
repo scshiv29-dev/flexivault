@@ -37,7 +37,7 @@ describe("system autofill payload", () => {
     expect(isAndroidPackageName("com..app")).toBe(false);
   });
 
-  it("includes only logins with a password and a host or package", () => {
+  it("includes logins with a password even without a website or package", () => {
     const payload = buildAutofillPayload([
       item({ id: "1", password: "one", urls: ["https://www.github.com/login"] }),
       item({ id: "2", password: "secret", androidPackages: ["com.github.android"] }),
@@ -46,9 +46,10 @@ describe("system autofill payload", () => {
       item({ id: "5", type: "note", password: "not-a-login", urls: ["https://note.example"] }),
       item({ id: "6", password: "deleted", urls: ["https://old.example"], deletedAt: 1 }),
       item({ id: "7", password: "single-label", urls: ["https://intranet"] }),
+      item({ id: "8", name: "", password: "no-name", urls: ["https://example.com"] }),
     ]);
 
-    expect(payload.logins.map((login) => login.id)).toEqual(["1", "2"]);
+    expect(payload.logins.map((login) => login.id)).toEqual(["1", "2", "4", "7"]);
     expect(payload.logins[0]).toMatchObject({
       hosts: ["github.com"],
       packages: [],
@@ -56,6 +57,14 @@ describe("system autofill payload", () => {
     expect(payload.logins[1]).toMatchObject({
       hosts: [],
       packages: ["com.github.android"],
+    });
+    expect(payload.logins[2]).toMatchObject({
+      hosts: [],
+      packages: [],
+    });
+    expect(payload.logins[3]).toMatchObject({
+      hosts: [],
+      packages: [],
     });
   });
 

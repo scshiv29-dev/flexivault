@@ -1,5 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
+import * as DocumentPicker from "expo-document-picker";
 import { useRouter } from "expo-router";
 import { useRef, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
@@ -14,7 +15,12 @@ import { PageHeader, SectionHeader } from "@/components/ui/PageHeader";
 import { Screen } from "@/components/ui/Screen";
 import { Sheet } from "@/components/ui/Sheet";
 import { useToast } from "@/components/ui/Toast";
-import { hasNativeQrScanner, scanQrCode } from "@/lib/native/qr-scanner";
+import {
+  canImportQrImage,
+  decodeQrImage,
+  hasNativeQrScanner,
+  scanQrCode,
+} from "@/lib/native/qr-scanner";
 import { useVault } from "@/lib/state/vault-provider";
 import type { NewVaultItem } from "@/lib/state/vault-helpers";
 import { useAppTheme } from "@/lib/theme";
@@ -57,9 +63,11 @@ export default function ScanScreen() {
   const toast = useToast();
   const { addItem, importItems } = useVault();
   const scannerAvailable = hasNativeQrScanner();
+  const imageAvailable = canImportQrImage();
 
   const [mode, setMode] = useState<Mode>("camera");
   const [scanning, setScanning] = useState(false);
+  const [imageScanning, setImageScanning] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
   const [parsed, setParsed] = useState<ParsedOtpAuth[] | null>(null);
   const [importing, setImporting] = useState(false);
@@ -116,10 +124,34 @@ export default function ScanScreen() {
     }
   };
 
+  const pickImage = async () => {
+    if (lockRef.current) return;
+    setParseError(null);
+    setImageScanning(true);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: "image/*",
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled) return;
+      const asset = result.assets?.[0];
+      if (!asset) throw new Error("No image was selected.");
+      const data = await decodeQrImage(asset.uri);
+      if (!data.trim()) throw new Error("No QR code was found in that image.");
+      handlePayload(data);
+    } catch (caught) {
+      setParseError((caught as Error).message);
+    } finally {
+      setImageScanning(false);
+    }
+  };
+
   const closeSheet = () => {
     setParsed(null);
     lockRef.current = false;
     setScanning(false);
+    setImageScanning(false);
   };
 
   const confirmImport = async () => {
@@ -234,7 +266,7 @@ export default function ScanScreen() {
       <PageHeader
         eyebrow="Scan"
         title="Add a code"
-        subtitle="Point at an otpauth QR code, or enter the secret by hand."
+        subtitle="Scan or upload an otpauth QR code, or enter the secret by hand."
         onBack={() => router.back()}
       />
 
@@ -249,13 +281,14 @@ export default function ScanScreen() {
           setMode(value as Mode);
           setParseError(null);
           setScanning(false);
+          setImageScanning(false);
           lockRef.current = false;
         }}
       />
 
       {mode === "camera" ? (
         <View style={{ marginTop: 16 }}>
-          {scannerAvailable ? (
+          {scannerAvailable || imageAvailable ? (
             <Card style={{ alignItems: "center", paddingVertical: 28, gap: 14 }}>
               <View
                 style={[
@@ -267,30 +300,53 @@ export default function ScanScreen() {
               </View>
               <View style={{ alignItems: "center", gap: 5 }}>
                 <AppText variant="h3" align="center">
-                  Scan an authenticator QR code
+                  {scannerAvailable
+                    ? "Scan an authenticator QR code"
+                    : "Upload an authenticator QR code"}
                 </AppText>
-                <AppText variant="small" align="center" style={{ maxWidth: 290 }}>
-                  The camera opens in a secure scanner and closes after reading a
-                  code. Nothing is recorded or uploaded.
+                <AppText variant="small" align="center" style={{ maxWidth: 300 }}>
+                  {scannerAvailable
+                    ? "Use the camera or pick a screenshot from your gallery. Everything is decoded on this device and nothing is uploaded."
+                    : "Pick a screenshot or photo of the QR code. Everything is decoded in this browser and nothing is uploaded."}
                 </AppText>
               </View>
-              <Button
-                label="Open camera"
-                icon="camera"
-                fullWidth={false}
-                onPress={openScanner}
-                loading={scanning}
-                style={{ marginTop: 2 }}
-              />
+              <View style={{ flexDirection: "row", gap: 10, alignSelf: "stretch" }}>
+                {scannerAvailable ? (
+                  <Button
+                    label="Open camera"
+                    icon="camera"
+                    fullWidth={false}
+                    onPress={openScanner}
+                    loading={scanning}
+                    style={{ flex: 1 }}
+                  />
+                ) : null}
+                {imageAvailable ? (
+                  <Button
+                    label="Upload image"
+                    icon="image"
+                    variant={scannerAvailable ? "secondary" : "primary"}
+                    fullWidth={false}
+                    onPress={pickImage}
+                    loading={imageScanning}
+                    style={{ flex: 1 }}
+                  />
+                ) : null}
+              </View>
+              {!scannerAvailable ? (
+                <AppText variant="small" align="center" style={{ maxWidth: 290 }}>
+                  Camera scanning is available in the Android app.
+                </AppText>
+              ) : null}
             </Card>
           ) : (
             <Callout
               tone="info"
-              title="Camera scanning needs the Android app"
+              title="QR scanning needs the Android app"
               body={
                 Platform.OS === "android"
-                  ? "This build does not include the native QR scanner. Use the signed Android APK, or paste or enter the key below."
-                  : "Use Paste link or Enter key here. Camera scanning is available in the Android app."
+                  ? "This build does not include the native QR tools. Use the signed Android APK, or paste or enter the key below."
+                  : "Use Paste link or Enter key here. QR scanning and image upload are available in the Android app, or use a browser that can read QR images."
               }
             />
           )}
