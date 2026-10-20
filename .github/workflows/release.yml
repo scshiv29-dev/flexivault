@@ -184,6 +184,63 @@ jobs:
               --generate-notes
           fi
 
+  extension:
+    name: Package the browser extension
+    needs: android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Package the extension zip
+        id: package
+        run: |
+          VERSION=$(node -p "require('./extension/manifest.json').version")
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            NAME="FlexiVault-Extension-${VERSION}"
+          else
+            NAME="FlexiVault-Extension-${VERSION}-${GITHUB_SHA::7}"
+          fi
+
+          mkdir -p dist
+          (
+            cd extension
+            zip -r "../dist/${NAME}.zip" \
+              manifest.json \
+              background.js \
+              content.js \
+              popup.html \
+              popup.css \
+              popup.js \
+              vault.html \
+              src \
+              fonts \
+              icons
+          )
+
+          (
+            cd dist
+            sha256sum "${NAME}.zip" > "${NAME}.zip.sha256"
+            unzip -l "${NAME}.zip"
+          )
+
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "path=dist/${NAME}.zip" >> "$GITHUB_OUTPUT"
+          echo "checksum=dist/${NAME}.zip.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flexivault-extension
+          path: dist/
+          if-no-files-found: error
+
+      - name: Publish the extension to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+
   server-image:
     name: Publish the server image
     needs: verify

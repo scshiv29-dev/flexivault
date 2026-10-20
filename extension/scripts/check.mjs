@@ -49,7 +49,18 @@ for (const file of jsFiles) {
 }
 
 const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
+const extensionPackage = JSON.parse(
+  await readFile(path.join(root, "package.json"), "utf8")
+);
 assert.equal(manifest.manifest_version, 3);
+if (!/^\d+(\.\d+){1,3}$/.test(manifest.version)) {
+  errors.push(`manifest version ${manifest.version} is not a store-compatible version`);
+}
+if (manifest.version !== extensionPackage.version) {
+  errors.push(
+    `manifest version ${manifest.version} does not match package.json version ${extensionPackage.version}`
+  );
+}
 assert.equal(manifest.action.default_popup, "popup.html");
 assert.equal(
   manifest.background?.service_worker,

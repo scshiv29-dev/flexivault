@@ -67,6 +67,18 @@ npm run icons   # regenerate the PNG icons
 and jsdom. jsdom is available from the repository root's dev dependencies
 (`npm install` at the root); the extension itself has no runtime dependencies.
 
+## Package and publish
+
+A release tag attaches `FlexiVault-Extension-<version>.zip` and its SHA-256
+checksum to the GitHub Release. The zip contains only the runtime files, with
+`manifest.json` at its root. Build the same package locally with the
+PowerShell/Linux commands in [`STORE.md`](STORE.md).
+
+Chromium stores still require a manual listing and review. [`STORE.md`](STORE.md)
+covers the Chrome Web Store and Microsoft Edge Add-ons submission, the exact
+listing copy, permission justifications, data-use answers, screenshots, and the
+reviewer demo account. Firefox is not supported yet.
+
 ### Layout
 
 | Path | Purpose |

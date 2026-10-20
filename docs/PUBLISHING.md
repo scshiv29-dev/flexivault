@@ -7,6 +7,7 @@ for now; the current release channel is GitHub.
 | Artifact | Built by | Where it goes |
 | --- | --- | --- |
 | Signed Android APK | `.github/workflows/release.yml` on a `v*` tag | GitHub Release assets |
+| Browser extension ZIP | `release.yml` on a `v*` tag | GitHub Release assets; upload to Chrome Web Store / Edge Add-ons |
 | Debug APK | `.github/workflows/ci.yml` on `main` / pull requests | Actions artifact |
 | Server image | `release.yml` on a tag, `server-image.yml` on `main` | `ghcr.io/scshiv29-dev/flexivault-server` |
 
@@ -84,6 +85,11 @@ Before a release, update:
 `versionCode` must increase for every published APK. `versionName` is the
 human-readable version shown on the device.
 
+For an extension update, also update `extension/manifest.json` and
+`extension/package.json` to the same version. The extension `npm run check`
+fails if those two files disagree. The extension version is independent of the
+APK version, but bump it for every store upload.
+
 ## 4. Build a release locally (optional)
 
 ```powershell
@@ -130,13 +136,16 @@ Runs when a tag matching `v*` is pushed, or manually from the Actions tab:
 3. builds `app-release.apk`
 4. verifies the signature and writes a SHA-256 checksum
 5. creates or updates the GitHub Release and uploads the APK + checksum
-6. builds and pushes the server image to GHCR
+6. packages the browser extension as
+   `FlexiVault-Extension-<version>.zip` and attaches it to the same release
+7. builds and pushes the server image to GHCR
 
 A tagged release **fails** if the four signing secrets are missing. This is
 deliberate: do not publish an unsigned or debug-signed APK as a release.
 
-A manual **Run workflow** builds the APK as an artifact and pushes an `edge`
-server image, but does not create a GitHub Release. Use a tag for releases.
+A manual **Run workflow** builds the APK and extension zip as artifacts and
+pushes an `edge` server image, but does not create a GitHub Release. Use a tag
+for releases.
 
 ### Server image — `.github/workflows/server-image.yml`
 
@@ -182,12 +191,27 @@ git push origin v1.0.0
 
 Wait for the **Release** workflow. When it finishes:
 
-- **Releases** contains `FlexiVault-1.0.0.apk` and
-  `FlexiVault-1.0.0.apk.sha256`.
+- **Releases** contains `FlexiVault-1.0.0.apk`,
+  `FlexiVault-1.0.0.apk.sha256`, `FlexiVault-Extension-1.0.0.zip` and
+  `FlexiVault-Extension-1.0.0.zip.sha256`.
 - GHCR contains `latest`, `v1.0.0` and the commit tag for the server image.
 
 If the tag already exists, delete the remote tag and recreate it only after
 understanding that users may already have downloaded the old release.
+
+### Publish the extension to a browser store
+
+The release zip is ready to upload, but a store listing is **not** created by
+the tag workflow. Chrome Web Store and Microsoft Edge Add-ons each require a
+one-time developer account, listing assets, a public privacy policy, review
+notes with a working demo account, and manual review. Follow
+[`extension/STORE.md`](../extension/STORE.md) for the exact steps and copy. The
+draft privacy policy is [`docs/EXTENSION-PRIVACY.md`](EXTENSION-PRIVACY.md); host
+it at a public URL before submitting.
+
+Firefox is not supported yet: the extension uses Chromium's
+`background.service_worker` and `chrome.*` APIs. Do not upload this zip to AMO
+until a Firefox port has been tested.
 
 ## 7. Self-host with Coolify
 
@@ -228,6 +252,13 @@ Get-FileHash FlexiVault-1.0.0.apk -Algorithm SHA256
 # Compare with the .sha256 file on the release page.
 ```
 
+```powershell
+# Extension zip
+Get-FileHash FlexiVault-Extension-1.0.0.zip -Algorithm SHA256
+tar -tf FlexiVault-Extension-1.0.0.zip | Select-Object -First 12
+# manifest.json must be at the zip root; entry order does not matter.
+```
+
 ```bash
 # Server image
 docker buildx imagetools inspect \
@@ -244,7 +275,10 @@ docker buildx imagetools inspect \
 | `versionCode` already exists | Increment it in `app.json` and `android/app/build.gradle`, commit, and tag a new version. |
 | GHCR pull is denied | The package is private. Make it public or add registry credentials in Coolify. |
 | Coolify still runs the old server | `FLEXIVAULT_IMAGE_TAG` points at the old tag, or `latest` was not re-pulled. Re-pull/redeploy. |
-| No release assets | The workflow ran manually instead of from a `v*` tag; manual runs only upload an Actions artifact. |
+| No release assets | The workflow ran manually instead of from a `v*` tag; manual runs only upload Actions artifacts. |
+| Release has the APK but no extension zip | The extension job failed or was skipped. It runs after the Android job; check that log and re-run failed jobs. |
+| Chrome says the manifest is missing | The zip contains a nested `extension/` folder. Rebuild with the runtime files at the zip root. |
+| Chrome rejects the extension version | Bump `extension/manifest.json` and `extension/package.json` above the published version, rerun `npm run check`, and rebuild. |
 
 ## Related documents
 
@@ -252,3 +286,7 @@ docker buildx imagetools inspect \
   device-test checklist.
 - [`COOLIFY.md`](COOLIFY.md) — self-hosting the server on Coolify.
 - [`IMPORTING.md`](IMPORTING.md) — password-manager import formats.
+- [`EXTENSION-PRIVACY.md`](EXTENSION-PRIVACY.md) — public privacy-policy draft
+  for the Chrome Web Store / Edge Add-ons listing.
+- [`../extension/STORE.md`](../extension/STORE.md) — extension package,
+  store listing copy, permission justifications and review checklist.

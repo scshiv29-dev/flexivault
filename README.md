@@ -269,7 +269,9 @@ persistent volume, environment variables and backups.
    server account in the mobile app first if it does not exist.
 
 See [`extension/README.md`](extension/README.md) for the permission model and
-security notes.
+security notes, and [`extension/STORE.md`](extension/STORE.md) for the Chrome
+Web Store / Edge Add-ons package and review checklist. The store listing is
+separate from GitHub Releases and is submitted manually.
 
 ## Releases and self-hosting
 
@@ -278,6 +280,8 @@ there is no Play Store or F-Droid listing.
 
 - Push a `v*` tag (for example `v1.0.0`) to build a signed APK, verify it, and
   publish `FlexiVault-1.0.0.apk` plus a SHA-256 checksum on GitHub Releases.
+- The same tag publishes the extension package
+  `FlexiVault-Extension-<version>.zip` for the browser stores or unpacked use.
 - The same tag publishes
   `ghcr.io/scshiv29-dev/flexivault-server:v1.0.0` and `:latest` for Coolify or
   plain Docker.
@@ -419,6 +423,10 @@ use an EAS preview build; the seeded account and server URL work the same way.
   backup, security notes.
 - [`extension/README.md`](extension/README.md) — install, permissions, layout,
   threat model, limitations.
+- [`extension/STORE.md`](extension/STORE.md) — package, Chrome Web Store and Edge
+  Add-ons submission, listing copy, permissions and review notes.
+- [`docs/EXTENSION-PRIVACY.md`](docs/EXTENSION-PRIVACY.md) — public privacy-policy
+  draft for the extension listing.
 
 ## License
 
