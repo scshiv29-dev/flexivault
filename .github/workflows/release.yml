@@ -123,7 +123,9 @@ jobs:
 
       - name: Build the release APK
         working-directory: android
-        run: ./gradlew --no-daemon :app:assembleRelease
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:assembleRelease
 
       - name: Collect the APK and checksum
         id: package
