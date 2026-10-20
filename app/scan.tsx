@@ -1,9 +1,8 @@
 import { Feather } from "@expo/vector-icons";
-import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
 import { useRef, useState } from "react";
-import { Platform, Pressable, StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 
 import { AppText } from "@/components/ui/AppText";
 import { Button, LinkButton } from "@/components/ui/Button";
@@ -15,6 +14,7 @@ import { PageHeader, SectionHeader } from "@/components/ui/PageHeader";
 import { Screen } from "@/components/ui/Screen";
 import { Sheet } from "@/components/ui/Sheet";
 import { useToast } from "@/components/ui/Toast";
+import { hasNativeQrScanner, scanQrCode } from "@/lib/native/qr-scanner";
 import { useVault } from "@/lib/state/vault-provider";
 import type { NewVaultItem } from "@/lib/state/vault-helpers";
 import { useAppTheme } from "@/lib/theme";
@@ -56,10 +56,10 @@ export default function ScanScreen() {
   const router = useRouter();
   const toast = useToast();
   const { addItem, importItems } = useVault();
-  const [permission, requestPermission] = useCameraPermissions();
+  const scannerAvailable = hasNativeQrScanner();
 
   const [mode, setMode] = useState<Mode>("camera");
-  const [scanning, setScanning] = useState(true);
+  const [scanning, setScanning] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
   const [parsed, setParsed] = useState<ParsedOtpAuth[] | null>(null);
   const [importing, setImporting] = useState(false);
@@ -84,7 +84,6 @@ export default function ScanScreen() {
       if (isOtpAuthUrl(data)) {
         const single = parseOtpAuthUrl(data);
         lockRef.current = true;
-        setScanning(false);
         setParsed([single]);
         return;
       }
@@ -94,22 +93,33 @@ export default function ScanScreen() {
           throw new Error("That migration code contained no TOTP accounts.");
         }
         lockRef.current = true;
-        setScanning(false);
         setParsed(many);
         return;
       }
       throw new Error("That QR code is not an authenticator code.");
     } catch (caught) {
       setParseError((caught as Error).message);
+    }
+  };
+
+  const openScanner = async () => {
+    if (lockRef.current) return;
+    setParseError(null);
+    setScanning(true);
+    try {
+      const data = await scanQrCode();
+      if (data) handlePayload(data);
+    } catch (caught) {
+      setParseError((caught as Error).message);
+    } finally {
       setScanning(false);
-      setTimeout(() => setScanning(true), 1400);
     }
   };
 
   const closeSheet = () => {
     setParsed(null);
     lockRef.current = false;
-    setScanning(true);
+    setScanning(false);
   };
 
   const confirmImport = async () => {
@@ -238,97 +248,51 @@ export default function ScanScreen() {
         onChange={(value) => {
           setMode(value as Mode);
           setParseError(null);
+          setScanning(false);
           lockRef.current = false;
-          setScanning(true);
         }}
       />
 
       {mode === "camera" ? (
         <View style={{ marginTop: 16 }}>
-          {Platform.OS === "web" ? (
-            <Callout
-              tone="info"
-              title="Camera scanning is mobile-only"
-              body="Use Paste link or Enter key in the browser. The mobile app scans QR codes directly."
-            />
-          ) : !permission ? (
-            <Card>
-              <AppText variant="small">Preparing the camera…</AppText>
-            </Card>
-          ) : !permission.granted ? (
-            <Card style={{ alignItems: "center", paddingVertical: 28, gap: 12 }}>
+          {scannerAvailable ? (
+            <Card style={{ alignItems: "center", paddingVertical: 28, gap: 14 }}>
               <View
                 style={[
-                  styles.permissionIcon,
+                  styles.scanIcon,
                   { backgroundColor: theme.colors.accentFaint },
                 ]}
               >
-                <Feather name="camera" size={26} color={theme.colors.accent} />
+                <Feather name="maximize" size={26} color={theme.colors.accent} />
               </View>
-              <AppText variant="h3" align="center">
-                Camera access needed
-              </AppText>
-              <AppText variant="small" align="center" style={{ maxWidth: 280 }}>
-                The camera is used only to read QR codes. Nothing is recorded or
-                uploaded.
-              </AppText>
+              <View style={{ alignItems: "center", gap: 5 }}>
+                <AppText variant="h3" align="center">
+                  Scan an authenticator QR code
+                </AppText>
+                <AppText variant="small" align="center" style={{ maxWidth: 290 }}>
+                  The camera opens in a secure scanner and closes after reading a
+                  code. Nothing is recorded or uploaded.
+                </AppText>
+              </View>
               <Button
-                label="Allow camera"
+                label="Open camera"
                 icon="camera"
                 fullWidth={false}
-                onPress={requestPermission}
-                style={{ marginTop: 4 }}
+                onPress={openScanner}
+                loading={scanning}
+                style={{ marginTop: 2 }}
               />
             </Card>
           ) : (
-            <View
-              style={[
-                styles.cameraFrame,
-                {
-                  borderColor: theme.colors.border,
-                  backgroundColor: theme.colors.cardStrong,
-                },
-              ]}
-            >
-              <CameraView
-                style={StyleSheet.absoluteFill}
-                facing="back"
-                barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-                onBarcodeScanned={
-                  scanning ? (result) => handlePayload(result.data) : undefined
-                }
-              />
-              <View style={styles.viewfinder} pointerEvents="none">
-                {(["tl", "tr", "bl", "br"] as const).map((corner) => (
-                  <View
-                    key={corner}
-                    style={[
-                      styles.corner,
-                      corner.includes("t") ? { top: 0 } : { bottom: 0 },
-                      corner.includes("l") ? { left: 0 } : { right: 0 },
-                      {
-                        borderColor: theme.colors.accent,
-                        borderTopWidth: corner.includes("t") ? 3 : 0,
-                        borderBottomWidth: corner.includes("b") ? 3 : 0,
-                        borderLeftWidth: corner.includes("l") ? 3 : 0,
-                        borderRightWidth: corner.includes("r") ? 3 : 0,
-                      },
-                    ]}
-                  />
-                ))}
-                <View
-                  style={[
-                    styles.scanPill,
-                    { backgroundColor: "rgba(0,0,0,0.55)" },
-                  ]}
-                >
-                  <Feather name="maximize" size={13} color="#FFFFFF" />
-                  <AppText variant="small" style={{ color: "#FFFFFF", fontSize: 12 }}>
-                    Align the QR code inside the frame
-                  </AppText>
-                </View>
-              </View>
-            </View>
+            <Callout
+              tone="info"
+              title="Camera scanning needs the Android app"
+              body={
+                Platform.OS === "android"
+                  ? "This build does not include the native QR scanner. Use the signed Android APK, or paste or enter the key below."
+                  : "Use Paste link or Enter key here. Camera scanning is available in the Android app."
+              }
+            />
           )}
 
           {parseError ? (
@@ -588,38 +552,7 @@ export default function ScanScreen() {
 }
 
 const styles = StyleSheet.create({
-  cameraFrame: {
-    height: 320,
-    borderRadius: 24,
-    borderWidth: 1,
-    overflow: "hidden",
-  },
-  viewfinder: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  corner: {
-    position: "absolute",
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-  },
-  scanPill: {
-    position: "absolute",
-    bottom: 18,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-  },
-  permissionIcon: {
+  scanIcon: {
     width: 64,
     height: 64,
     borderRadius: 20,

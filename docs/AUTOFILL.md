@@ -34,8 +34,8 @@ Chrome's password manager or use Android's autofill picker.
 
 Current limitations:
 
-- Only login items are offered. Cards, identities, passkeys and save/update
-  prompts are not implemented.
+- Only login items are offered. Cards and identities can be stored in the vault
+  but are not filled; passkeys and save/update prompts are not implemented.
 - Only the first detected username/password pair in a form is filled.
 - The service needs Android 8.0 (API 26) or newer.
 - A native build is required; the feature is unavailable in Expo Go.
@@ -120,7 +120,9 @@ unlocked or until lock/expiry, and it is encrypted at rest.
 - Native-app match: the target package exactly equals an item's
   `androidPackages` entry (case-insensitive).
 - FlexiVault's own package is excluded.
-- At most 8 datasets are returned for a request.
+- At most 8 datasets are returned for a request. Each matching login is a
+  separate dataset, so several saved accounts for the same site or app appear as
+  separate choices in Android's autofill picker.
 - A username field is filled only when the login has a non-empty username. The
   password field is always filled when a dataset is chosen.
 
@@ -164,7 +166,9 @@ On a physical Android 8+ device (or an emulator with a secure lock screen):
    then tap **Android autofill settings** and select FlexiVault.
 3. Add a login with `https://example.com` and, for a native test, an app package.
 4. In Chrome, open `https://example.com`, focus the login form and choose the
-   FlexiVault suggestion. Confirm biometrics/PIN. The fields fill.
+   FlexiVault suggestion. Confirm biometrics/PIN. The fields fill. If the vault
+   has several logins for the same host, Android should list each one separately
+   (label plus username); choose either to verify the right pair is filled.
 5. Try a look-alike domain such as `example.com.evil.test`; no suggestion should
    appear.
 6. In the native test app, focus its username/password form; only logins with its
@@ -199,8 +203,9 @@ covered by this implementation.
 
 This needs an Apple developer account and App Store/sideload signing.
 
-## F-Droid
+## Distribution
 
 Android autofill uses platform APIs and AndroidX Biometric; it does not require
-Google Play services. The existing QR scanner's proprietary ML Kit dependency is
-still a separate F-Droid blocker; see [`PUBLISHING.md`](PUBLISHING.md).
+Google Play services. The QR scanner uses ZXing Android Embedded (Apache-2.0),
+and `expo-camera`/ML Kit is no longer part of the Android build. Signed APKs are
+published on GitHub Releases; see [`PUBLISHING.md`](PUBLISHING.md).

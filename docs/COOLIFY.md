@@ -1,11 +1,13 @@
 # Deploy the FlexiVault server on Coolify
 
-Coolify runs the zero-dependency Node server from `server/Dockerfile` and puts
-its own TLS reverse proxy in front of it. SQLite lives on a persistent Docker
+Coolify runs the zero-dependency Node server from a published container image and
+puts its own TLS reverse proxy in front of it. SQLite lives on a persistent Docker
 volume, so redeploying the app does not touch accounts or vault data.
 
-Use this guide after the repository is on GitHub. Coolify needs a repository it
-can clone; it does not need a prebuilt image.
+Use this guide after the repository is on GitHub. The release workflow publishes
+`ghcr.io/scshiv29-dev/flexivault-server` for tags, and the server-image workflow
+publishes `:edge` from `main`. Coolify can also build from source if you prefer to
+deploy a checkout directly.
 
 ## What you get
 
@@ -34,19 +36,28 @@ Make sure these files are committed and pushed:
 Do **not** commit `.env`, `server/data/`, `android/keystore.properties`, a
 release keystore, or an `*.apk` / `*.aab`.
 
-The compose file uses the repository root as its build context:
+The compose file pulls the image published by the release workflow:
 
 ```yaml
-build:
-  context: ./server
-  dockerfile: Dockerfile
+image: ghcr.io/scshiv29-dev/flexivault-server:${FLEXIVAULT_IMAGE_TAG:-latest}
 ```
+
+For a reproducible deployment, set `FLEXIVAULT_IMAGE_TAG` to a release tag such
+as `v1.0.0`. The image is public; if the GitHub Container Registry package is
+still private, open the package settings on GitHub and change its visibility to
+public, or add registry credentials in Coolify.
+
+To build the image from this checkout instead, comment out the `image:` line and
+uncomment the `build:` block in the compose file. That path needs the repository
+contents but not a prebuilt image.
 
 ## 2. Create the Coolify resource
 
 1. Open your Coolify project and choose **New Resource**.
 2. Choose **Docker Compose** (not a static site or a database).
-3. Select your GitHub repository and the branch to deploy (`main`).
+3. Select your GitHub repository and the branch to deploy (`main`). The image
+   path is independent of the branch; Coolify still needs the compose file from
+   the repository.
 4. Set **Base Directory** to `/` and **Docker Compose Location** to
    `/docker-compose.coolify.yml`.
 5. Leave the build pack as Docker Compose.
@@ -62,6 +73,7 @@ In the resource's **Environment Variables** tab, add or confirm:
 | Variable | Value |
 | --- | --- |
 | `SERVER_NAME` | `FlexiVault` |
+| `FLEXIVAULT_IMAGE_TAG` | `v1.0.0`, `latest`, or `edge` |
 | `REGISTRATION_OPEN` | `true` for the first account |
 | `CORS_ORIGINS` | `*` for the mobile app and extension |
 | `TOKEN_TTL_SECONDS` | `2592000` (30 days) |
@@ -161,8 +173,12 @@ the manual command above is the fallback.
 
 ## 7. Updates
 
-Coolify redeploys from the selected branch. The image is rebuilt from
-`server/Dockerfile`; there is no database migration step for normal updates.
+For a published release, change `FLEXIVAULT_IMAGE_TAG` to the new tag and
+redeploy. To follow the newest release, keep it on `latest`; to follow `main`,
+set it to `edge`. Coolify must pull the new image to see the change.
+
+If you use the source-build block instead, Coolify rebuilds from the selected
+branch. There is no database migration step for normal updates.
 
 When you update the app, keep the same volume. Do not change `DATA_DIR` unless
 you also move the data. A container restart is safe.
@@ -172,6 +188,8 @@ you also move the data. A container restart is safe.
 | Symptom | Check |
 | --- | --- |
 | `502` from the proxy | Container is not listening on 8787, or the domain targets the wrong port. Inspect container logs. |
+| Image pull denied | The GHCR package is private. Make it public or add registry credentials in Coolify. |
+| Old server after deploy | `FLEXIVAULT_IMAGE_TAG` still points at the old tag, or Coolify reused a cached `latest` image. Re-pull/redeploy. |
 | Health check fails | `DATA_DIR=/data` must be writable by the `node` user; do not mount a root-owned directory. |
 | `SQLITE_BUSY` or locked database | Only one container may use a SQLite volume. Do not scale the service to multiple replicas. |
 | Registration rejected | `REGISTRATION_OPEN=false` is set; create the account first, or turn it back on temporarily. |

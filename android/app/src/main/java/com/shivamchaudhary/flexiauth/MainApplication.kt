@@ -12,6 +12,7 @@ import com.facebook.react.common.ReleaseLevel
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
 
 import com.shivamchaudhary.flexiauth.autofill.FlexiVaultAutofillPackage
+import com.shivamchaudhary.flexiauth.qr.FlexiVaultQrScannerPackage
 
 import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ExpoReactHostFactory
@@ -26,6 +27,7 @@ class MainApplication : Application(), ReactApplication {
           // Packages that cannot be autolinked yet can be added manually here, for example:
           // add(MyReactNativePackage())
           add(FlexiVaultAutofillPackage())
+          add(FlexiVaultQrScannerPackage())
         }
     )
   }

@@ -123,8 +123,7 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Personal/GitHub releases read android/keystore.properties.
-            // F-Droid builds leave it absent and signs the unsigned APK itself.
+            // GitHub release builds read android/keystore.properties.
             if (keystorePropertiesFile.exists()) {
                 signingConfig signingConfigs.release
             }
@@ -174,6 +173,10 @@ dependencies {
     // already brings this in; declaring it here keeps the native module
     // compilable if that dependency changes.
     implementation("androidx.biometric:biometric:1.2.0-alpha04")
+    // Apache-2.0 QR decoder used by the Android scanner. This replaces
+    // expo-camera's proprietary ML Kit barcode path with an on-device decoder
+    // that has no Google Play services dependency.
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

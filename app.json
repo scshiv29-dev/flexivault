@@ -27,13 +27,6 @@
     "plugins": [
       "expo-router",
       [
-        "expo-camera",
-        {
-          "cameraPermission": "FlexiVault uses the camera only to scan authenticator QR codes.",
-          "recordAudioAndroid": false
-        }
-      ],
-      [
         "expo-local-authentication",
         {
           "faceIDPermission": "FlexiVault uses Face ID to unlock your encrypted vault."

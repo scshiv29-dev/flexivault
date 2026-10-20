@@ -48,5 +48,9 @@
       android:exported="false"
       android:excludeFromRecents="true"
       android:theme="@style/Theme.FlexiVault.Transparent"/>
+    <activity
+      android:name="com.journeyapps.barcodescanner.CaptureActivity"
+      android:screenOrientation="portrait"
+      tools:replace="android:screenOrientation"/>
   </application>
 </manifest>

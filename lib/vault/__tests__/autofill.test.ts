@@ -59,6 +59,40 @@ describe("system autofill payload", () => {
     });
   });
 
+  it("keeps every login for a site so Android can show multiple options", () => {
+    const payload = buildAutofillPayload([
+      item({
+        id: "work",
+        name: "GitHub work",
+        username: "work@example.com",
+        password: "work-secret",
+        urls: ["https://github.com/login"],
+      }),
+      item({
+        id: "personal",
+        name: "GitHub personal",
+        username: "me@example.com",
+        password: "personal-secret",
+        urls: ["https://github.com/session"],
+      }),
+      item({
+        id: "mobile",
+        name: "GitHub mobile",
+        username: "mobile@example.com",
+        password: "mobile-secret",
+        androidPackages: ["com.github.android"],
+      }),
+    ]);
+
+    expect(payload.logins.map((login) => login.id)).toEqual([
+      "work",
+      "personal",
+      "mobile",
+    ]);
+    expect(payload.logins[0].hosts).toEqual(["github.com"]);
+    expect(payload.logins[1].hosts).toEqual(["github.com"]);
+  });
+
   it("does not include TOTP or notes in any field", () => {
     const payload = buildAutofillPayload([
       item({

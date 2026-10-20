@@ -15,9 +15,15 @@ name: flexivault
 
 services:
   server:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
+    # Published by .github/workflows/release.yml and server-image.yml. Pin
+    # FLEXIVAULT_IMAGE_TAG to a release tag (for example v1.0.0) for reproducible
+    # deployments, to latest for the newest release, or to edge for main.
+    image: ghcr.io/scshiv29-dev/flexivault-server:${FLEXIVAULT_IMAGE_TAG:-latest}
+    # To build from this checkout instead of pulling the published image,
+    # comment out the image line above and uncomment this block:
+    # build:
+    #   context: ./server
+    #   dockerfile: Dockerfile
     restart: unless-stopped
     init: true
     expose:

@@ -1,348 +1,251 @@
-# Publishing FlexiVault
+# Releasing FlexiVault
 
-FlexiVault is distributed as a standalone Android APK. There is no Play Store
-listing: personal builds go to GitHub Releases, and public distribution goes
-through F-Droid.
+FlexiVault ships through **GitHub Releases** and the **GitHub Container
+Registry**. There is no Play Store listing. F-Droid publishing is out of scope
+for now; the current release channel is GitHub.
 
-| Target | Signing | Distribution |
+| Artifact | Built by | Where it goes |
 | --- | --- | --- |
-| Personal / friends | Your release keystore | GitHub Releases, direct APK |
-| Public F-Droid | F-Droid signs from source | F-Droid repository |
+| Signed Android APK | `.github/workflows/release.yml` on a `v*` tag | GitHub Release assets |
+| Debug APK | `.github/workflows/ci.yml` on `main` / pull requests | Actions artifact |
+| Server image | `release.yml` on a tag, `server-image.yml` on `main` | `ghcr.io/scshiv29-dev/flexivault-server` |
 
-The same `applicationId` (`com.shivamchaudhary.flexiauth`) must be used for both,
-but Android will refuse to install one over the other because the signing keys
-differ. Uninstall the personal build before installing the F-Droid build.
+The app uses `com.shivamchaudhary.flexiauth` as its application ID. Always keep
+the same release signing key: Android refuses to install an update signed by a
+different key. Losing the keystore means every user must uninstall the old app
+before installing a new build.
 
-## Before the first release
+## 1. Create the release keystore once
 
-1. Choose a FOSS license. F-Droid requires one. This repository uses
-   **AGPL-3.0-only**; keep the full text in `LICENSE`, the
-   `"license": "AGPL-3.0-only"` field in `package.json`, and the notice in the
-   README. If you change the license, update the F-Droid metadata as well.
-2. Confirm the version in both places:
-   - `app.json` → `expo.version` and `expo.android.versionCode`
-   - `android/app/build.gradle` → `versionName` and `versionCode`
-3. Remove secrets and build artifacts from the tree:
-   - no `.env`, `server/data/`, `*.jks`, `android/keystore.properties`
-   - no `android/app/build/`, `*.apk`, `*.aab`
-4. Run the checks:
+The keystore, `android/keystore.properties`, `*.jks`, `*.apk` and `*.aab` are
+gitignored. Never commit them.
 
-   ```bash
-   npx tsc --noEmit
-   npm test
-   cd server && npm test && cd ..
-   cd extension && npm run check && npm test && cd ..
-   ```
-
-5. Commit and tag the exact source you will build. F-Droid builds from a commit,
-   not from a local working tree.
-
-## Personal APK
-
-### 1. Create a release keystore once
-
-```bash
-keytool -genkeypair -v \
-  -keystore keystore/flexivault-release.jks \
-  -alias flexivault \
-  -keyalg RSA \
-  -keysize 4096 \
+```powershell
+New-Item -ItemType Directory -Force android\keystore
+keytool -genkeypair -v `
+  -keystore android\keystore\flexivault-release.jks `
+  -alias flexivault `
+  -keyalg RSA `
+  -keysize 4096 `
   -validity 10000
 ```
 
-`keystore/` and `*.jks` are ignored by Git. Store the keystore and its passwords
-in a password manager and an offline backup. If you lose them you cannot update
-an installed app; Android will reject an APK signed with a different key. If the
-key leaks, anyone can publish a malicious update under your identity.
+Back up the `.jks` file and its passwords somewhere safe and offline. This key
+is the update identity for the app.
 
-### 2. Configure local signing
-
-```bash
-cp android/keystore.properties.example android/keystore.properties
-```
-
-Edit `android/keystore.properties`:
+For a local release build, create `android/keystore.properties` from
+`android/keystore.properties.example` and fill in the real values:
 
 ```properties
 storeFile=keystore/flexivault-release.jks
-storePassword=…
+storePassword=your-keystore-password
 keyAlias=flexivault
-keyPassword=…
+keyPassword=your-key-password
 ```
 
-`android/keystore.properties` is ignored by Git. The path is relative to
-`android/`. The Gradle file loads this file only when it exists, so F-Droid can
-build an unsigned APK without it.
+Paths in this file are relative to the `android/` directory.
 
-> **Native project warning.** This repository commits `android/`. If you run
-> `npx expo prebuild --platform android --clean`, the generated Gradle files
-> are recreated and the release-signing block can be overwritten. Re-apply it,
-> or use the checked-in `android/` project without a clean prebuild. F-Droid
-> uses the committed project and does not need prebuild.
+## 2. Add the GitHub Actions secrets
 
-### 3. Build the signed APK
+Open **Settings → Secrets and variables → Actions → New repository secret** and
+add:
+
+| Secret | Value |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | Base64 of `android/keystore/flexivault-release.jks` |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `ANDROID_KEY_ALIAS` | `flexivault` |
+| `ANDROID_KEY_PASSWORD` | Key password |
+
+Create the base64 value without line wrapping:
+
+```powershell
+[Convert]::ToBase64String(
+  [IO.File]::ReadAllBytes("android/keystore/flexivault-release.jks")
+)
+```
 
 ```bash
-cd android
-./gradlew :app:assembleRelease
+# Linux/macOS equivalent
+base64 -w0 android/keystore/flexivault-release.jks
 ```
 
-On Windows:
+The release workflow writes `android/keystore.properties` and the `.jks` file
+inside the runner from these secrets. Nothing is stored in the repository.
+
+## 3. Keep the version numbers in sync
+
+Before a release, update:
+
+- `app.json` → `expo.version` and `expo.android.versionCode`
+- `android/app/build.gradle` → `versionName` and `versionCode` (the Android
+  project is checked in)
+
+`versionCode` must increase for every published APK. `versionName` is the
+human-readable version shown on the device.
+
+## 4. Build a release locally (optional)
 
 ```powershell
 cd android
-.\gradlew.bat :app:assembleRelease
+.\gradlew.bat --no-daemon :app:assembleRelease
 ```
 
-The APK is at:
+With a valid `android/keystore.properties`, the output is:
 
 ```text
 android/app/build/outputs/apk/release/app-release.apk
 ```
 
-Verify the signature and 16 KB alignment:
+Without signing material, Gradle produces
+`app-release-unsigned.apk`, which Android will not install. That is useful for
+inspecting the package, not for distribution.
 
-```bash
-$ANDROID_HOME/build-tools/<version>/apksigner verify --verbose --print-certs \
-  app/build/outputs/apk/release/app-release.apk
+Verify the signature:
 
-$ANDROID_HOME/build-tools/<version>/zipalign -c -P 16 -v 4 \
-  app/build/outputs/apk/release/app-release.apk
+```powershell
+& "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --print-certs `
+  android\app\build\outputs\apk\release\app-release.apk
 ```
 
-For a Play-style bundle (not needed for GitHub or F-Droid):
+## 5. GitHub Actions
 
-```bash
-./gradlew :app:bundleRelease
-# android/app/build/outputs/bundle/release/app-release.aab
+### CI — `.github/workflows/ci.yml`
+
+Runs on every push to `main` and on pull requests:
+
+- type-checks the app with `tsc`
+- runs the mobile, server and extension tests
+- builds a debug APK and uploads `flexivault-debug-apk` as an Actions artifact
+
+This is the quickest installable build for device testing, but it is debug-signed
+and is not a public release.
+
+### Release — `.github/workflows/release.yml`
+
+Runs when a tag matching `v*` is pushed, or manually from the Actions tab:
+
+1. verifies the source and tests
+2. materializes the signing keystore from repository secrets
+3. builds `app-release.apk`
+4. verifies the signature and writes a SHA-256 checksum
+5. creates or updates the GitHub Release and uploads the APK + checksum
+6. builds and pushes the server image to GHCR
+
+A tagged release **fails** if the four signing secrets are missing. This is
+deliberate: do not publish an unsigned or debug-signed APK as a release.
+
+A manual **Run workflow** builds the APK as an artifact and pushes an `edge`
+server image, but does not create a GitHub Release. Use a tag for releases.
+
+### Server image — `.github/workflows/server-image.yml`
+
+Runs on every push to `main` and manually. It publishes:
+
+```text
+ghcr.io/scshiv29-dev/flexivault-server:edge
+ghcr.io/scshiv29-dev/flexivault-server:sha-<commit>
 ```
 
-### 4. Publish on GitHub Releases
+The `release.yml` tag build publishes:
 
-Create the repository once (required before F-Droid can clone it):
-
-```bash
-git init
-git add .
-git commit -m "FlexiVault 1.0.0"
-git branch -M main
-git remote add origin https://github.com/<you>/flexivault.git
-git push -u origin main
+```text
+ghcr.io/scshiv29-dev/flexivault-server:latest
+ghcr.io/scshiv29-dev/flexivault-server:v1.0.0
+ghcr.io/scshiv29-dev/flexivault-server:sha-<commit>
 ```
 
-With GitHub CLI:
+The first GHCR push creates a private package. Open the package settings on
+GitHub and set its visibility to **public**, or add registry credentials in
+Coolify.
 
-```bash
-gh repo create <you>/flexivault --public --source=. --remote=origin --push
-```
+## 6. Cut a release
 
-Create a tag and a release with the APK and a checksum:
+```powershell
+# 1. Update app.json and android/app/build.gradle versions first.
+npx tsc --noEmit
+npx jest --runInBand
+cd server
+npm test
+cd ..\extension
+npm run check
+npm test
+cd ..
 
-```bash
+# 2. Commit and tag.
+git add -A
+git commit -m "Release 1.0.0"
 git tag -a v1.0.0 -m "FlexiVault 1.0.0"
+git push origin main
 git push origin v1.0.0
-
-sha256sum android/app/build/outputs/apk/release/app-release.apk > app-release.apk.sha256
-gh release create v1.0.0 \
-  android/app/build/outputs/apk/release/app-release.apk \
-  app-release.apk.sha256 \
-  --title "FlexiVault 1.0.0" \
-  --notes "First standalone release."
 ```
 
-Or use the GitHub web UI: **Releases → Draft a new release → choose the tag →
-upload the APK and checksum**.
+Wait for the **Release** workflow. When it finishes:
 
-### 5. Install and update
+- **Releases** contains `FlexiVault-1.0.0.apk` and
+  `FlexiVault-1.0.0.apk.sha256`.
+- GHCR contains `latest`, `v1.0.0` and the commit tag for the server image.
 
-Android requires **Install unknown apps** permission for the browser or file
-manager used to open the APK. Updates must use the same signing key and a
-higher `versionCode`. Users do not need to uninstall for an update signed with
-the same key.
+If the tag already exists, delete the remote tag and recreate it only after
+understanding that users may already have downloaded the old release.
 
-## F-Droid
+## 7. Self-host with Coolify
 
-F-Droid builds the app from source on its own build servers and signs it with
-F-Droid's key. You do not upload an APK.
-
-### Requirements
-
-- Public source repository with the exact buildable commit.
-- A recognized FOSS license (`LICENSE` at the repository root).
-- No proprietary dependencies, tracking, analytics, or remote code.
-- `versionCode` increases for every release.
-- A reproducible Gradle build.
-- Metadata in the `fdroiddata` repository.
-
-### 1. Make the source buildable from a clean checkout
-
-F-Droid starts from a fresh clone and runs the build as an unprivileged user.
-The checked-in `android/` project is used directly:
-
-```bash
-npm ci
-cd android
-./gradlew :app:assembleRelease
-```
-
-If you remove `android/` and rely on prebuild, the build entry needs an extra
-init step:
+[`docker-compose.coolify.yml`](../docker-compose.coolify.yml) pulls the published image:
 
 ```yaml
-init: npm ci && npx expo prebuild --platform android --no-install
+image: ghcr.io/scshiv29-dev/flexivault-server:${FLEXIVAULT_IMAGE_TAG:-latest}
 ```
 
-That is slower and less reproducible. Prefer committing the generated Android
-project for F-Droid.
+Set `FLEXIVAULT_IMAGE_TAG` to a release tag such as `v1.0.0` for reproducible
+deployments, or to `edge` to follow `main`. Keep the `flexivault-data` volume;
+it holds SQLite, the JWT key and the server encryption key.
 
-### 2. Handle the ML Kit dependency
-
-This is the current blocker for public F-Droid inclusion.
-
-`expo-camera`'s barcode scanner uses Google ML Kit:
-
-```gradle
-com.google.android.gms:play-services-code-scanner:16.1.0
-com.google.mlkit:barcode-scanning:17.3.0
-androidx.camera:camera-mlkit-vision:...
-```
-
-ML Kit and Google Play services are proprietary. F-Droid will reject a build
-that packages them. `expo-camera` exposes:
-
-```json
-[
-  "expo-camera",
-  {
-    "barcodeScannerEnabled": false
-  }
-]
-```
-
-That changes the dependencies to `compileOnly`, so they are not packaged in the
-APK. It is **not sufficient by itself** for F-Droid: the dependency declarations
-are still visible to F-Droid's scanner, and the merged manifest can still carry
-the ML Kit `com.google.mlkit.vision.DEPENDENCIES` metadata. Pick one of these:
-
-**Option A — F-Droid build without camera QR scanning.** Fork or patch
-`expo-camera`'s Gradle and manifest to remove the three ML Kit lines and the
-metadata, set `barcodeScannerEnabled: false`, and hide the QR scanner UI in that
-build. Manual secret entry and pasted `otpauth://` links continue to work. This
-is the smallest change, but users lose camera QR scanning in the F-Droid build.
-
-**Option B — replace ML Kit with an open-source decoder.** Use ZXing
-(Apache-2.0) or a pure-JS QR decoder behind a config plugin, and remove the
-`expo-camera` barcode path entirely. This keeps QR scanning and is the better
-long-term answer, but it is a native feature and needs its own build/test cycle.
-
-Do not submit an APK that silently contains ML Kit and hope the scanner misses
-it. The F-Droid review checks dependencies and the merged manifest.
-
-### 3. Add F-Droid metadata
-
-Fork `fdroiddata`, then add
-`metadata/com.shivamchaudhary.flexiauth.yml`:
-
-```yaml
-Categories:
-  - Security
-License: AGPL-3.0-only
-AuthorName: Shivam Chaudhary
-SourceCode: https://github.com/<you>/flexivault
-IssueTracker: https://github.com/<you>/flexivault/issues
-Changelog: https://github.com/<you>/flexivault/releases
-AutoName: FlexiVault
-
-RepoType: git
-Repo: https://github.com/<you>/flexivault.git
-
-Builds:
-  - versionName: 1.0.0
-    versionCode: 1
-    commit: v1.0.0
-    subdir: android
-    gradle:
-      - yes
-    output: app/build/outputs/apk/release/app-release-unsigned.apk
-    init: npm ci
-```
-
-Notes:
-
-- `commit` must be the tag or full commit SHA, not a branch.
-- `subdir: android` means Gradle runs in the checked-in Android project.
-- `init: npm ci` runs at the repository root before changing to `subdir`.
-- `output` is relative to `subdir`. With no `android/keystore.properties`,
-  Gradle produces `app-release-unsigned.apk`; F-Droid signs it.
-- If the build server needs a specific NDK, add `ndk: <version>` using the NDK
-  version your local `android/` build uses. Do not guess.
-- If F-Droid's build server lacks the Node version Expo 57 needs, say so in the
-  merge request; F-Droid maintainers can provide a newer build environment.
-
-### 4. Test reproducibility
-
-Build twice from the same commit and compare:
+To deploy without Coolify:
 
 ```bash
-cd android
-./gradlew clean :app:assembleRelease
-cp app/build/outputs/apk/release/app-release-unsigned.apk /tmp/first.apk
-./gradlew clean :app:assembleRelease
-cp app/build/outputs/apk/release/app-release-unsigned.apk /tmp/second.apk
-sha256sum /tmp/first.apk /tmp/second.apk
+docker run -d \
+  --name flexivault-server \
+  -p 8787:8787 \
+  -v flexivault-data:/data \
+  -e REGISTRATION_OPEN=true \
+  ghcr.io/scshiv29-dev/flexivault-server:v1.0.0
 ```
 
-The hashes should match. If they do not, look for timestamps, absolute paths, or
-non-deterministic generated files. F-Droid can still accept a non-reproducible
-build, but reproducible builds are strongly preferred and may be required for
-the "reproducible" badge.
+See [`COOLIFY.md`](COOLIFY.md) for domains, backups and environment variables.
 
-### 5. Submit
+## 8. Verify a release
 
-1. Push the source and tag.
-2. Add the metadata file in a branch of your `fdroiddata` fork.
-3. Run `fdroid lint com.shivamchaudhary.flexiauth` and `fdroid rewritemeta`.
-4. Open a merge request against `fdroiddata`.
-5. Respond to review comments. After merge, the next F-Droid index update
-   publishes the app.
+```powershell
+# APK
+& "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --print-certs `
+  FlexiVault-1.0.0.apk
+Get-FileHash FlexiVault-1.0.0.apk -Algorithm SHA256
 
-Future releases: bump `versionCode` and `versionName`, tag the commit, and add a
-new `Builds` entry. Do not edit an old build entry after it has shipped.
+# Compare with the .sha256 file on the release page.
+```
 
-### 6. F-Droid limitations
+```bash
+# Server image
+docker buildx imagetools inspect \
+  ghcr.io/scshiv29-dev/flexivault-server:v1.0.0
+```
 
-- F-Droid signs with its own key. Users must uninstall a personal build before
-  installing the F-Droid build, and vice versa.
-- F-Droid updates can lag behind GitHub releases.
-- The F-Droid build must not include Google ML Kit, Firebase, Crashlytics,
-  analytics, or remote update code.
-- `expo-camera` is MIT, AndroidX is Apache-2.0, and the rest of the app's
-  dependencies are compatible. ML Kit is the outlier.
+## Troubleshooting
 
-## iOS
+| Symptom | Cause / fix |
+| --- | --- |
+| Release workflow fails at “Require signing secrets” | Add all four Android signing secrets, then re-run the workflow. |
+| Release contains an unsigned APK | The keystore step was skipped. Do not distribute it; fix the secrets and rebuild. |
+| APK will not install over an older build | The signing keys differ. Uninstall the old app, or use the original keystore. |
+| `versionCode` already exists | Increment it in `app.json` and `android/app/build.gradle`, commit, and tag a new version. |
+| GHCR pull is denied | The package is private. Make it public or add registry credentials in Coolify. |
+| Coolify still runs the old server | `FLEXIVAULT_IMAGE_TAG` points at the old tag, or `latest` was not re-pulled. Re-pull/redeploy. |
+| No release assets | The workflow ran manually instead of from a `v*` tag; manual runs only upload an Actions artifact. |
 
-There is no App Store or TestFlight plan in this document. A sideloaded iOS
-build needs an Apple developer account and a provisioning profile. System-wide
-AutoFill on iOS needs a separate **AutoFill Credential Provider** extension,
-which is not part of the current Expo project. Treat iOS distribution and iOS
-autofill as a separate project.
+## Related documents
 
-## Versioning checklist
-
-For every release:
-
-- [ ] Update `expo.version` in `app.json`.
-- [ ] Increment `expo.android.versionCode` in `app.json`.
-- [ ] Update `versionName` / `versionCode` in `android/app/build.gradle` if the
-      Android project is checked in (it is).
-- [ ] Run type checks and tests.
-- [ ] Build a release APK and verify the signature.
-- [ ] Tag the commit (`v1.0.0`).
-- [ ] Publish the APK and SHA-256 on GitHub Releases.
-- [ ] Add the F-Droid build entry only after the tag exists.
-
-## Related docs
-
-- [`COOLIFY.md`](COOLIFY.md) — host the sync server on Coolify.
-- [`IMPORTING.md`](IMPORTING.md) — supported import formats and safety notes.
-- [`AUTOFILL.md`](AUTOFILL.md) — Android/iOS system autofill design and status.
+- [`AUTOFILL.md`](AUTOFILL.md) — Android autofill design, security model and
+  device-test checklist.
+- [`COOLIFY.md`](COOLIFY.md) — self-hosting the server on Coolify.
+- [`IMPORTING.md`](IMPORTING.md) — password-manager import formats.

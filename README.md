@@ -25,7 +25,8 @@ The mobile app works entirely offline. A server only adds multi-device sync.
 │   └── vault/            Crypto, API, sync, OTP, otpauth, generator, security
 ├── server/               Node 22 sync server (no npm dependencies)
 ├── extension/            MV3 popup, full vault page, background suggester
-├── docs/                 publishing, Coolify, import, autofill guides
+├── .github/workflows/    CI, signed APK releases, server image publishing
+├── docs/                 publishing/releasing, Coolify, import, autofill guides
 ├── docker-compose.yml    One-command server deployment
 ├── docker-compose.coolify.yml  Coolify deployment (internal port)
 └── .env.example          Compose configuration
@@ -36,8 +37,9 @@ The mobile app works entirely offline. A server only adds multi-device sync.
 ### Mobile app
 
 - Five item types: login, secure note, payment card, identity, authenticator.
-- TOTP with live progress rings, QR scanning, `otpauth://` paste/import, manual
-  secrets, and automatic migration of the legacy `flexiauth` authenticator DB.
+- TOTP with live progress rings, native Android QR scanning (ZXing),
+  `otpauth://` paste/import, manual secrets, and automatic migration of the
+  legacy `flexiauth` authenticator DB. iOS/web use the paste and manual paths.
 - Password and passphrase generator, entropy estimate and strength meter.
 - CSV and Bitwarden JSON import from common password managers, with a preview,
   folder preservation and invalid-TOTP warnings.
@@ -147,8 +149,9 @@ npm run android        # build and install the native development app
 
 `npm run android` starts Metro after installing the debug build. Rebuild after
 changing native dependencies; JavaScript-only changes hot-reload normally.
-Expo Go 57 is enough for everyday development; the native build is still the
-right target for 16 KB page-size and standalone checks.
+Expo Go 57 is enough for everyday JavaScript work, but the native build is
+required for system autofill and Android QR scanning, and it is the right target
+for 16 KB page-size and standalone checks.
 
 On first launch:
 
@@ -253,7 +256,8 @@ Put TLS in front before exposing the port. See [`server/README.md`](server/READM
 for environment variables, reverse-proxy examples, backups and the API.
 
 For a managed deployment with automatic HTTPS, see
-[`docs/COOLIFY.md`](docs/COOLIFY.md). It uses
+[`docs/COOLIFY.md`](docs/COOLIFY.md). It pulls the published
+`ghcr.io/scshiv29-dev/flexivault-server` image through
 [`docker-compose.coolify.yml`](docker-compose.coolify.yml) and explains the
 persistent volume, environment variables and backups.
 
@@ -266,6 +270,24 @@ persistent volume, environment variables and backups.
 
 See [`extension/README.md`](extension/README.md) for the permission model and
 security notes.
+
+## Releases and self-hosting
+
+Distribution is through **GitHub Releases** and **GitHub Container Registry**;
+there is no Play Store or F-Droid listing.
+
+- Push a `v*` tag (for example `v1.0.0`) to build a signed APK, verify it, and
+  publish `FlexiVault-1.0.0.apk` plus a SHA-256 checksum on GitHub Releases.
+- The same tag publishes
+  `ghcr.io/scshiv29-dev/flexivault-server:v1.0.0` and `:latest` for Coolify or
+  plain Docker.
+- Every push to `main` publishes the server image as `:edge` and uploads a
+  debug APK as a CI artifact.
+
+The release workflow needs four repository secrets for the signing key; without
+them a tagged release stops instead of publishing an unsigned APK. See
+[`docs/PUBLISHING.md`](docs/PUBLISHING.md) for keystore creation, secrets,
+version bumps and the tag workflow.
 
 ## Tests and checks
 
@@ -361,9 +383,10 @@ use an EAS preview build; the seeded account and server URL work the same way.
 
 - Android system autofill is implemented in the native app but must be verified
   on a device; Expo Go cannot provide it. It fills only login username/password
-  pairs (not cards, identities or passkeys) and only the first detected pair in a
-  form. iOS autofill is not implemented. See
-  [`docs/AUTOFILL.md`](docs/AUTOFILL.md).
+  pairs and only the first detected pair in a form. Cards and identities can be
+  stored, viewed and copied, but they are not offered by system autofill.
+  Passkeys and save/update prompts are not implemented. iOS autofill is not
+  implemented. See [`docs/AUTOFILL.md`](docs/AUTOFILL.md).
 - No sharing, organizations, collections, passkeys, or file attachments.
 - Single-node server only; in-memory rate limits do not span replicas.
 - No account deletion or password-change endpoint; manage the data directory
@@ -373,19 +396,19 @@ use an EAS preview build; the seeded account and server URL work the same way.
   field. Fields inside a page's own shadow DOM, iframes, split one-character OTP
   boxes, and card/identity/CVC fields are not suggested.
 - Card/identity autofill is not implemented; only login credentials are filled.
+- iOS QR scanning is not available in the current build; use the paste or manual
+  key path until the iOS scanner is added. Android uses the ZXing decoder.
 - The UI is portrait-first and the extension is Chromium-only (MV3, Chrome 116+).
 - Import copies items; it does not deduplicate repeated imports or connect to
   another password manager's API.
-- No Play Store listing. GitHub Releases hosts personal APKs; public F-Droid
-  inclusion is currently blocked by the proprietary ML Kit dependency pulled in
-  by `expo-camera` barcode scanning. See
-  [`docs/PUBLISHING.md`](docs/PUBLISHING.md).
+- No Play Store or F-Droid listing. GitHub Releases hosts signed APKs, and GHCR
+  hosts the server image. See [`docs/PUBLISHING.md`](docs/PUBLISHING.md).
 - This is a learning-focused project, not an audited password manager.
 
 ## Documentation
 
-- [`docs/PUBLISHING.md`](docs/PUBLISHING.md) — personal signed APKs, GitHub
-  Releases, F-Droid metadata and the ML Kit blocker.
+- [`docs/PUBLISHING.md`](docs/PUBLISHING.md) — signed APK releases, signing
+  secrets, version bumps and GHCR server images.
 - [`docs/COOLIFY.md`](docs/COOLIFY.md) — deploy the sync server on Coolify with
   Docker Compose, HTTPS, a persistent volume and backups.
 - [`docs/IMPORTING.md`](docs/IMPORTING.md) — supported CSV/JSON formats, field
