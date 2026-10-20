@@ -84,12 +84,13 @@ reject a version that is not greater than the currently published one.
    - the full-page vault;
    - a live TOTP code.
    Optionally add a `440×280` small promotional image.
-5. Open **Privacy practices** and answer the questions as described below.
+5. Open the **Privacy** tab and answer the questions as described below.
 6. Set **Distribution** to public, all regions, free.
-7. Add **Notes for review** with a working demo server and account. This is the
+7. Add **Test instructions** with a working demo server and account. This is the
    part that most often blocks a self-hosted password manager.
 8. Submit for review. Reviews commonly take several days and can take longer
-   for broad host permissions and sensitive data.
+   for broad host permissions and sensitive data. You can choose deferred
+   publishing if you want to inspect the approved listing before it goes live.
 
 ### Detailed description copy
 
@@ -130,7 +131,7 @@ FlexiVault is open source under AGPL-3.0-only. Source and self-hosting
 instructions: https://github.com/scshiv29-dev/flexivault
 ```
 
-### Notes for review template
+### Test instructions template
 
 The extension cannot create an account and needs a reachable FlexiVault server.
 Create a **separate demo account with dummy data**; never give reviewers your
@@ -197,10 +198,16 @@ advertising:
   a derived authentication verifier is sent to the user's own server. Saved
   passwords and TOTP secrets are decrypted only after unlock.
 - **Personally identifiable information** — the server URL and account email
-  configured by the user.
+  configured by the user, and identity details the user saved in the vault.
+- **Financial and payment information** — saved card numbers and CVVs are
+  decrypted only when the user opens or copies a card item. The developer does
+  not receive them.
 - **Website content** — the active hostname and the login/OTP field types used
   to match and fill a form. A password or code is sent to the page only after
   the user selects an item.
+
+The extension does not build a browsing history. It reads the active tab URL
+only for a user-initiated fill and does not send it to the developer.
 
 Answer **No** to selling data, transferring data for purposes unrelated to the
 single purpose, and using data for creditworthiness or lending. Explain that

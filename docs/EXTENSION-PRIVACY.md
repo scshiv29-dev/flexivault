@@ -16,6 +16,9 @@ covered by the same project and the same principles.
 - **Encrypted vault cache.** Vault items downloaded from your server are stored
   locally as ciphertext envelopes. The extension does not store plaintext items
   in extension storage.
+- **Vault item contents.** Items can include logins, secure notes, payment
+  cards, identities and authenticator codes. They are decrypted locally only
+  when you open, reveal or copy an item.
 - **Session data.** A bearer token is stored in `chrome.storage.local`; the
   derived vault key is kept in memory-backed `chrome.storage.session`. Locking
   drops the key. The token allows a silent re-authentication after the idle
