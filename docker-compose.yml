@@ -10,23 +10,23 @@ services:
     ports:
       - "${FLEXIVAULT_PORT:-8787}:8787"
     environment:
-      HOST: 0.0.0.0
+      HOST: "0.0.0.0"
       PORT: "8787"
-      DATA_DIR: /data
-      SERVER_NAME: ${SERVER_NAME:-FlexiVault}
-      REGISTRATION_OPEN: ${REGISTRATION_OPEN:-true}
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      TOKEN_TTL_SECONDS: ${TOKEN_TTL_SECONDS:-2592000}
-      MAX_VAULT_BYTES: ${MAX_VAULT_BYTES:-8388608}
-      MAX_ITEMS: ${MAX_ITEMS:-5000}
-      TRUST_PROXY: ${TRUST_PROXY:-false}
+      DATA_DIR: "/data"
+      SERVER_NAME: "${SERVER_NAME:-FlexiVault}"
+      REGISTRATION_OPEN: "${REGISTRATION_OPEN:-true}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-*}"
+      TOKEN_TTL_SECONDS: "${TOKEN_TTL_SECONDS:-2592000}"
+      MAX_VAULT_BYTES: "${MAX_VAULT_BYTES:-8388608}"
+      MAX_ITEMS: "${MAX_ITEMS:-5000}"
+      TRUST_PROXY: "${TRUST_PROXY:-false}"
       # Empty values make the server generate and persist secrets in /data.
-      JWT_SECRET: ${JWT_SECRET:-}
-      ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-}
+      JWT_SECRET: "${JWT_SECRET:-}"
+      ENCRYPTION_SECRET: "${ENCRYPTION_SECRET:-}"
     volumes:
       - flexivault-data:/data
     security_opt:
-      - no-new-privileges:true
+      - "no-new-privileges:true"
     healthcheck:
       test:
         [

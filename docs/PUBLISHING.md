@@ -194,12 +194,15 @@ understanding that users may already have downloaded the old release.
 [`docker-compose.coolify.yml`](../docker-compose.coolify.yml) pulls the published image:
 
 ```yaml
-image: ghcr.io/scshiv29-dev/flexivault-server:${FLEXIVAULT_IMAGE_TAG:-latest}
+image: "ghcr.io/scshiv29-dev/flexivault-server:${FLEXIVAULT_IMAGE_TAG:-latest}"
 ```
 
 Set `FLEXIVAULT_IMAGE_TAG` to a release tag such as `v1.0.0` for reproducible
-deployments, or to `edge` to follow `main`. Keep the `flexivault-data` volume;
-it holds SQLite, the JWT key and the server encryption key.
+deployments, or to `edge` to follow `main`. Keep the named data volume (Coolify
+prefixes its name); it holds SQLite, the JWT key and the server encryption key.
+The public domain must route to the container's internal port `8787`; see
+[`COOLIFY.md`](COOLIFY.md) for the correct domain format and volume migration
+notes.
 
 To deploy without Coolify:
 

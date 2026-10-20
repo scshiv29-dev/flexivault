@@ -1,26 +1,34 @@
-name: flexivault
-
 # Coolify-specific compose file.
+#
+# Based on https://coolify.io/docs/applications/builds/docker-compose
 #
 # The normal docker-compose.yml publishes a host port for a VPS or a home
 # server. Coolify's proxy reaches this container over the internal Docker
 # network, so this file exposes 8787 instead of binding it to the host.
 #
-# In Coolify, create a Docker Compose resource with:
-#   Docker Compose Location: /docker-compose.coolify.yml
+# In Coolify, create a Git-based Docker Compose application with:
+#   Build strategy:          Compose (Docker Compose)
 #   Base Directory:          /
-#   Domain:                  https://vault.example.com -> port 8787
+#   Docker Compose Location: docker-compose.coolify.yml
+#   Domain:                  https://vault.example.com:8787
 #
-# Coolify injects SERVICE_FQDN_SERVER_8787 when a domain is configured.
+# The :8787 suffix in the domain is the internal container port that Coolify's
+# proxy routes to. It is not a public port and must not be opened on the host.
+#
+# Do not use "Raw (deploy file as-is)" mode: Coolify must add its proxy labels
+# and networking configuration. Do not add a ports: mapping.
 
 services:
   server:
     # Published by .github/workflows/release.yml and server-image.yml. Pin
     # FLEXIVAULT_IMAGE_TAG to a release tag (for example v1.0.0) for reproducible
     # deployments, to latest for the newest release, or to edge for main.
-    image: ghcr.io/scshiv29-dev/flexivault-server:${FLEXIVAULT_IMAGE_TAG:-latest}
+    image: "ghcr.io/scshiv29-dev/flexivault-server:${FLEXIVAULT_IMAGE_TAG:-latest}"
+    # Coolify redeploys the stack; always pulling makes a new release tag or
+    # latest image visible without manually deleting the old image.
+    pull_policy: always
     # To build from this checkout instead of pulling the published image,
-    # comment out the image line above and uncomment this block:
+    # comment out the image and pull_policy lines and uncomment this block:
     # build:
     #   context: ./server
     #   dockerfile: Dockerfile
@@ -29,28 +37,27 @@ services:
     expose:
       - "8787"
     environment:
-      HOST: 0.0.0.0
+      HOST: "0.0.0.0"
       PORT: "8787"
-      DATA_DIR: /data
-      SERVER_NAME: ${SERVER_NAME:-FlexiVault}
-      REGISTRATION_OPEN: ${REGISTRATION_OPEN:-true}
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      TOKEN_TTL_SECONDS: ${TOKEN_TTL_SECONDS:-2592000}
-      MAX_VAULT_BYTES: ${MAX_VAULT_BYTES:-8388608}
-      MAX_ITEMS: ${MAX_ITEMS:-5000}
+      DATA_DIR: "/data"
+      SERVER_NAME: "${SERVER_NAME:-FlexiVault}"
+      REGISTRATION_OPEN: "${REGISTRATION_OPEN:-true}"
+      # "*" is quoted so the value remains a string if Coolify renders the
+      # environment without Compose interpolation.
+      CORS_ORIGINS: "${CORS_ORIGINS:-*}"
+      TOKEN_TTL_SECONDS: "${TOKEN_TTL_SECONDS:-2592000}"
+      MAX_VAULT_BYTES: "${MAX_VAULT_BYTES:-8388608}"
+      MAX_ITEMS: "${MAX_ITEMS:-5000}"
       # Coolify terminates TLS in front of the container. Trust its proxy
       # headers so rate limiting uses the real client address.
-      TRUST_PROXY: ${TRUST_PROXY:-true}
+      TRUST_PROXY: "${TRUST_PROXY:-true}"
       # Empty values make the server generate and persist secrets in /data.
-      JWT_SECRET: ${JWT_SECRET:-}
-      ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-}
-      # Set by Coolify when a domain is assigned to port 8787. Leave the
-      # host-side default empty; Coolify injects the real value on deploy.
-      SERVICE_FQDN_SERVER_8787: ${SERVICE_FQDN_SERVER_8787:-}
+      JWT_SECRET: "${JWT_SECRET:-}"
+      ENCRYPTION_SECRET: "${ENCRYPTION_SECRET:-}"
     volumes:
       - flexivault-data:/data
     security_opt:
-      - no-new-privileges:true
+      - "no-new-privileges:true"
     healthcheck:
       test:
         [
