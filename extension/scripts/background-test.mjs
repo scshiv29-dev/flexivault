@@ -202,6 +202,37 @@ assert.deepEqual(
   "only items with a TOTP secret are offered to code fields"
 );
 
+const freshItem = {
+  id: "item_fresh",
+  type: "login",
+  name: "Fresh",
+  username: "fresh@example.com",
+  password: "fresh-password",
+  urls: ["https://fresh.test"],
+  updatedAt: Date.now(),
+};
+const cached = localArea.__get()[CACHE_KEY];
+await localArea.set({
+  [CACHE_KEY]: {
+    ...cached,
+    items: [
+      ...cached.items,
+      { id: freshItem.id, data: await encryptItem(vaultKey, freshItem) },
+    ],
+    revision: 2,
+    lastSyncedAt: Date.now(),
+  },
+});
+response = await request(
+  { type: "flexivault:suggest", kind: "login" },
+  { url: "https://fresh.test/login" }
+);
+assert.deepEqual(
+  response.items.map((item) => item.id),
+  ["item_fresh"],
+  "a cache update invalidates decrypted suggestions"
+);
+
 response = await request({
   type: "flexivault:suggest-fill",
   kind: "login",

@@ -28,20 +28,22 @@ export function TotpCard({
   const [error, setError] = useState<string | null>(null);
 
   const totp = item.totp;
-  const result = useMemo(() => {
+  const period = totp?.period && totp.period > 0 ? totp.period : 30;
+  const step = Math.floor(now / 1000 / period);
+  // The HMAC only changes once per TOTP step. Keep it memoized on the step so
+  // the once-per-second countdown does not rehash every mounted card.
+  const code = useMemo(() => {
     if (!totp?.secret) return null;
     try {
-      const code = generateTotp(totp, now);
-      const remaining = secondsRemaining(totp.period, now);
-      return { code, remaining, progress: remaining / totp.period };
+      return generateTotp(totp, step * period * 1000);
     } catch {
       return null;
     }
-  }, [totp, now]);
+  }, [totp, period, step]);
 
   if (!totp?.secret) return null;
 
-  if (!result) {
+  if (!code) {
     return (
       <Card>
         <AppText variant="small" color={theme.colors.danger}>
@@ -51,12 +53,14 @@ export function TotpCard({
     );
   }
 
-  const urgent = result.remaining <= 5;
+  const remaining = secondsRemaining(period, now);
+  const progress = remaining / period;
+  const urgent = remaining <= 5;
   const ringColor = urgent ? theme.colors.danger : theme.colors.accent;
 
   const copy = async () => {
     try {
-      await Clipboard.setStringAsync(result.code);
+      await Clipboard.setStringAsync(code);
       if (Platform.OS !== "web") {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
           () => {}
@@ -87,7 +91,7 @@ export function TotpCard({
         <ProgressRing
           size={42}
           stroke={3.5}
-          progress={result.progress}
+          progress={progress}
           color={ringColor}
         >
           <AppText
@@ -97,7 +101,7 @@ export function TotpCard({
               color: urgent ? theme.colors.danger : theme.colors.textMuted,
             }}
           >
-            {result.remaining}
+            {remaining}
           </AppText>
         </ProgressRing>
       </View>
@@ -123,7 +127,7 @@ export function TotpCard({
             color: urgent ? theme.colors.danger : theme.colors.text,
           }}
         >
-          {formatTotpCode(result.code)}
+          {formatTotpCode(code)}
         </AppText>
         <Feather name="copy" size={15} color={theme.colors.textMuted} />
       </Pressable>
@@ -139,7 +143,7 @@ export function TotpCard({
       >
         <View
           style={{
-            width: `${Math.max(0, Math.min(100, result.progress * 100))}%`,
+            width: `${Math.max(0, Math.min(100, progress * 100))}%`,
             height: "100%",
             backgroundColor: ringColor,
             borderRadius: 2,

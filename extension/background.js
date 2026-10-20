@@ -6,6 +6,7 @@ import { siteHost } from "./src/presentation.js";
 import {
   CACHE_KEY,
   CONFIG_KEY,
+  SESSION_KEY,
   isSessionFresh,
   local,
   session,
@@ -13,7 +14,12 @@ import {
 
 const MAX_SUGGESTIONS = 6;
 const TOUCH_INTERVAL_MS = 15_000;
+const DECRYPT_BATCH_SIZE = 32;
 let lastTouchAt = 0;
+// Suggestion metadata and the encrypted row map stay in worker memory only.
+// Passwords and TOTP secrets are decrypted per fill; every read still requires
+// a fresh unlocked session, and cache changes or lock events clear this.
+let decryptedVault = null;
 
 function senderHost(sender) {
   const raw = sender?.url ?? sender?.tab?.url ?? "";
@@ -34,6 +40,65 @@ function matchesHost(item, host) {
   });
 }
 
+function vaultCacheKey(cache, storedSession) {
+  const rows = Array.isArray(cache.items) ? cache.items : [];
+  return [
+    storedSession.encryptionKeyB64,
+    cache.revision ?? 0,
+    cache.lastSyncedAt ?? 0,
+    rows.length,
+    rows[0]?.id ?? "",
+    rows[rows.length - 1]?.id ?? "",
+  ].join(":");
+}
+
+function suggestionItem(item) {
+  return {
+    id: item.id,
+    type: item.type,
+    name: item.name,
+    username: item.username,
+    urls: item.urls,
+    favorite: item.favorite,
+    updatedAt: item.updatedAt,
+    hasPassword: Boolean(item.password),
+    hasTotp: Boolean(item.totp?.secret),
+    totp: item.totp
+      ? { issuer: item.totp.issuer, label: item.totp.label }
+      : undefined,
+  };
+}
+
+async function decryptRowMetadata(key, rows) {
+  const items = [];
+  for (let index = 0; index < rows.length; index += DECRYPT_BATCH_SIZE) {
+    const batch = rows.slice(index, index + DECRYPT_BATCH_SIZE);
+    const decrypted = await Promise.all(
+      batch.map(async (row) => {
+        if (!row?.data) return null;
+        try {
+          return await decryptItem(key, row.data);
+        } catch {
+          // A corrupt or foreign row must not break every other suggestion.
+          return null;
+        }
+      })
+    );
+    for (const item of decrypted) {
+      if (item && !item.deletedAt) items.push(suggestionItem(item));
+    }
+  }
+  return items;
+}
+
+function rowsById(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    if (row?.id && row?.data) map.set(row.id, row);
+  }
+  return map;
+}
+
 async function readVault() {
   const [stored, storedSession] = await Promise.all([
     local.get([CONFIG_KEY, CACHE_KEY]),
@@ -43,34 +108,45 @@ async function readVault() {
   const config = stored[CONFIG_KEY] ?? null;
   const cache = stored[CACHE_KEY] ?? { items: [] };
   if (!config) {
+    decryptedVault = null;
     return { configured: false, locked: false, items: [], vaultSession: null };
   }
   if (!storedSession?.encryptionKeyB64 || !isSessionFresh(storedSession)) {
+    decryptedVault = null;
     return { configured: true, locked: true, items: [], vaultSession: null };
+  }
+
+  const cacheKey = vaultCacheKey(cache, storedSession);
+  if (decryptedVault?.key === cacheKey) {
+    return {
+      configured: true,
+      locked: false,
+      items: decryptedVault.items,
+      rows: decryptedVault.rows,
+      vaultKey: decryptedVault.vaultKey,
+      vaultSession: storedSession,
+    };
   }
 
   let key;
   try {
     key = await importVaultKey(base64ToBytes(storedSession.encryptionKeyB64));
   } catch {
+    decryptedVault = null;
     return { configured: true, locked: true, items: [], vaultSession: null };
   }
 
-  const items = [];
-  for (const row of cache.items ?? []) {
-    if (!row?.data) continue;
-    try {
-      const item = await decryptItem(key, row.data);
-      if (item && !item.deletedAt) items.push(item);
-    } catch {
-      // A corrupt or foreign row must not break every other suggestion.
-    }
-  }
+  const rows = Array.isArray(cache.items) ? cache.items : [];
+  const items = await decryptRowMetadata(key, rows);
+  const byId = rowsById(rows);
+  decryptedVault = { key: cacheKey, items, rows: byId, vaultKey: key };
 
   return {
     configured: true,
     locked: false,
     items,
+    rows: byId,
+    vaultKey: key,
     vaultSession: storedSession,
   };
 }
@@ -89,8 +165,8 @@ function candidates(vault, host, kind) {
   return sortMatches(
     vault.items.filter((item) => {
       if (!matchesHost(item, host)) return false;
-      if (kind === "otp") return Boolean(item.totp?.secret);
-      return item.type === "login" && Boolean(item.password);
+      if (kind === "otp") return Boolean(item.hasTotp);
+      return item.type === "login" && Boolean(item.hasPassword);
     })
   );
 }
@@ -146,8 +222,28 @@ async function handle(message, sender) {
       return { ok: false, locked: true, error: "Unlock FlexiVault first." };
     }
 
-    const item = candidates(vault, host, kind).find((entry) => entry.id === id);
-    if (!item) {
+    const candidate = candidates(vault, host, kind).find(
+      (entry) => entry.id === id
+    );
+    const row = vault.rows?.get(id);
+    if (!candidate || !row?.data) {
+      return { ok: false, error: "That saved item does not match this website." };
+    }
+
+    let item;
+    try {
+      item = await decryptItem(vault.vaultKey, row.data);
+    } catch {
+      return { ok: false, error: "That saved item could not be decrypted." };
+    }
+    if (
+      !item ||
+      item.deletedAt ||
+      !matchesHost(item, host) ||
+      (kind === "otp"
+        ? !item.totp?.secret
+        : item.type !== "login" || !item.password)
+    ) {
       return { ok: false, error: "That saved item does not match this website." };
     }
 
@@ -188,4 +284,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     );
 
   return true;
+});
+
+chrome.storage?.onChanged?.addListener((changes, area) => {
+  if (area === "local" && (changes[CACHE_KEY] || changes[CONFIG_KEY])) {
+    decryptedVault = null;
+  }
+  if (
+    area === "session" &&
+    changes[SESSION_KEY] &&
+    !changes[SESSION_KEY].newValue?.encryptionKeyB64
+  ) {
+    decryptedVault = null;
+  }
+});
+
+chrome.runtime.onSuspend?.addListener(() => {
+  decryptedVault = null;
 });

@@ -238,31 +238,35 @@ function visibleItems(state) {
   });
 }
 
-function vaultBody(state) {
+export function vaultListHtml(state) {
   const items = state.items.filter((item) => !item.deletedAt);
   const filtered = visibleItems(state);
-  const logins = items.filter((item) => item.type === "login").length;
-  const codes = items.filter((item) => item.totp?.secret).length;
-  const cards = items.filter((item) => item.type === "card").length;
 
-  let list;
   if (items.length === 0) {
-    list = `<div class="empty">
+    return `<div class="empty">
       <div class="mark-large"></div>
       <h2>A clean slate</h2>
       <p>Your vault is empty. Add a login, secure note or authenticator in the mobile app —
       it will appear here after sync.</p>
     </div>`;
-  } else if (filtered.length === 0) {
-    list = `<div class="empty">
+  }
+  if (filtered.length === 0) {
+    return `<div class="empty">
       <h2>Nothing matches</h2>
       <p>Try another search or switch the filter.</p>
       <button class="btn secondary small" style="width:auto;margin-top:14px"
         data-action="clear-filters">Clear filters</button>
     </div>`;
-  } else {
-    list = filtered.map(itemRow).join("");
   }
+  return filtered.map(itemRow).join("");
+}
+
+function vaultBody(state) {
+  const items = state.items.filter((item) => !item.deletedAt);
+  const logins = items.filter((item) => item.type === "login").length;
+  const codes = items.filter((item) => item.totp?.secret).length;
+  const cards = items.filter((item) => item.type === "card").length;
+  const list = vaultListHtml(state);
 
   return `<main class="content">
     <div class="hero">

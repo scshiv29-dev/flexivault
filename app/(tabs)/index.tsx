@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useDeferredValue, useMemo, useState } from "react";
+import { memo, useDeferredValue, useMemo, useState } from "react";
 import {
   FlatList,
   Platform,
@@ -42,6 +42,56 @@ type VaultRow =
     }
   | { key: string; kind: "letter"; letter: string; count: number }
   | { key: string; kind: "item"; item: VaultItem; favorite?: boolean };
+
+const VaultItemRow = memo(function VaultItemRow({
+  item,
+  favorite = false,
+}: {
+  item: VaultItem;
+  favorite?: boolean;
+}) {
+  const theme = useAppTheme();
+  const router = useRouter();
+
+  return (
+    <ItemRow
+      item={item}
+      onPress={() => router.push(`/item/${item.id}`)}
+      right={
+        favorite ? (
+          <Feather name="star" size={15} color={theme.colors.warning} />
+        ) : item.totp?.secret && item.type !== "totp" ? (
+          <View
+            style={[
+              styles.twoFa,
+              {
+                backgroundColor: theme.colors.accentFaint,
+                borderColor: theme.colors.border,
+              },
+            ]}
+          >
+            <Feather name="hash" size={11} color={theme.colors.accent} />
+            <AppText
+              variant="caption"
+              color={theme.colors.accent}
+              style={{ fontSize: 9 }}
+            >
+              2FA
+            </AppText>
+          </View>
+        ) : item.favorite ? (
+          <Feather name="star" size={14} color={theme.colors.warning} />
+        ) : (
+          <Feather
+            name="chevron-right"
+            size={17}
+            color={theme.colors.textFaint}
+          />
+        )
+      }
+    />
+  );
+});
 
 export default function VaultScreen() {
   const theme = useAppTheme();
@@ -400,44 +450,7 @@ export default function VaultScreen() {
       );
     }
 
-    return (
-      <ItemRow
-        item={row.item}
-        onPress={() => router.push(`/item/${row.item.id}`)}
-        right={
-          row.favorite ? (
-            <Feather name="star" size={15} color={theme.colors.warning} />
-          ) : row.item.totp?.secret && row.item.type !== "totp" ? (
-            <View
-              style={[
-                styles.twoFa,
-                {
-                  backgroundColor: theme.colors.accentFaint,
-                  borderColor: theme.colors.border,
-                },
-              ]}
-            >
-              <Feather name="hash" size={11} color={theme.colors.accent} />
-              <AppText
-                variant="caption"
-                color={theme.colors.accent}
-                style={{ fontSize: 9 }}
-              >
-                2FA
-              </AppText>
-            </View>
-          ) : row.item.favorite ? (
-            <Feather name="star" size={14} color={theme.colors.warning} />
-          ) : (
-            <Feather
-              name="chevron-right"
-              size={17}
-              color={theme.colors.textFaint}
-            />
-          )
-        }
-      />
-    );
+    return <VaultItemRow item={row.item} favorite={row.favorite} />;
   };
 
   return (

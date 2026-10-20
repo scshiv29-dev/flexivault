@@ -41,7 +41,9 @@ export function openDatabase(dataDir) {
       PRIMARY KEY (user_id, item_id)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_vault_items_user ON vault_items(user_id);
+    -- The composite primary key already indexes user_id as its left-most
+    -- column, so a separate user_id index only adds write cost.
+    DROP INDEX IF EXISTS idx_vault_items_user;
 
     CREATE TABLE IF NOT EXISTS server_meta (
       key TEXT PRIMARY KEY,

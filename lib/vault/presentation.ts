@@ -1,5 +1,7 @@
 import { VaultItem } from "./types";
 
+const searchTextCache = new WeakMap<VaultItem, string>();
+
 export function itemIcon(item: VaultItem): string {
   switch (item.type) {
     case "card":
@@ -57,10 +59,11 @@ export function itemSubtitle(item: VaultItem): string {
   }
 }
 
-export function itemMatchesQuery(item: VaultItem, query: string): boolean {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return true;
-  const haystack = [
+function searchableText(item: VaultItem): string {
+  const cached = searchTextCache.get(item);
+  if (cached !== undefined) return cached;
+
+  const text = [
     item.name,
     item.username,
     item.notes,
@@ -76,7 +79,17 @@ export function itemMatchesQuery(item: VaultItem, query: string): boolean {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
-  return haystack.includes(needle);
+
+  searchTextCache.set(item, text);
+  return text;
+}
+
+function matchesNeedle(item: VaultItem, needle: string): boolean {
+  return !needle || searchableText(item).includes(needle);
+}
+
+export function itemMatchesQuery(item: VaultItem, query: string): boolean {
+  return matchesNeedle(item, query.trim().toLowerCase());
 }
 
 export function groupItemsAlphabetically(
@@ -108,9 +121,10 @@ export function filterItems(
   category: string,
   query: string
 ): VaultItem[] {
+  const needle = query.trim().toLowerCase();
   return items.filter((item) => {
     if (item.deletedAt) return false;
-    if (!itemMatchesQuery(item, query)) return false;
+    if (!matchesNeedle(item, needle)) return false;
 
     switch (category) {
       case "favorites":

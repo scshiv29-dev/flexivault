@@ -21,8 +21,9 @@ import {
   session,
   touchSession,
 } from "./src/store.js";
-import { appHtml } from "./src/ui.js";
+import { appHtml, vaultListHtml } from "./src/ui.js";
 
+const PULL_ON_OPEN_MS = 15_000;
 const appEl = document.getElementById("app");
 const toastEl = document.getElementById("toast");
 const fullPage =
@@ -178,7 +179,9 @@ async function boot() {
       state.items = sortItems(items);
       state.view = "vault";
       render();
-      pull({ silent: true });
+      if (Date.now() - Number(state.cache.lastSyncedAt ?? 0) > PULL_ON_OPEN_MS) {
+        pull({ silent: true });
+      }
       return;
     }
 
@@ -819,13 +822,14 @@ document.addEventListener("input", (event) => {
   }
 
   if (field === "query") {
-    const position = event.target.selectionStart ?? event.target.value.length;
-    render();
-    const input = document.querySelector('[data-field="query"]');
-    if (input) {
-      input.focus();
-      input.setSelectionRange(position, position);
+    const list = document.getElementById("vault-list");
+    if (state.view === "vault" && list) {
+      // Replace only the result rows so typing never rebuilds the whole popup
+      // or steals focus from the search field.
+      list.innerHTML = vaultListHtml(state);
+      return;
     }
+    render();
   }
 });
 
