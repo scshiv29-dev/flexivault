@@ -1305,6 +1305,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     await wipeDatabase();
     await setSessionToken(null);
     await setBiometricKey(null);
+    const pendingSaves = await readPendingAutofillSaves();
+    if (pendingSaves.length > 0) {
+      await clearPendingAutofillSaves(
+        pendingSaves.map((save) => save.itemId),
+      ).catch(() => {});
+    }
     await clearAutofillCache().catch(() => {});
     await clearNativePasskeys().catch(() => {});
 
