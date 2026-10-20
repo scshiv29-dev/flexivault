@@ -12,6 +12,11 @@ import {
 import { AppState, Platform } from "react-native";
 
 import {
+  clearAutofillCache,
+  configureAutofill,
+  hasNativeAutofill,
+} from "@/lib/native/autofill";
+import {
   getAllMeta,
   getStoredItems,
   readLegacyEntries,
@@ -72,6 +77,7 @@ export type VaultStatus = "loading" | "onboarding" | "locked" | "unlocked";
 const DEFAULT_SETTINGS: VaultSettings = {
   autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES,
   biometricsEnabled: false,
+  autofillEnabled: false,
   themeMode: "system",
 };
 
@@ -154,6 +160,7 @@ export interface VaultContextValue {
 
   setAutoLockMinutes: (value: number) => Promise<void>;
   setThemeMode: (value: ThemeMode) => Promise<void>;
+  setAutofillEnabled: (value: boolean) => Promise<void>;
   enableBiometrics: (password: string) => Promise<void>;
   disableBiometrics: () => Promise<void>;
 
@@ -324,6 +331,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setItems([]);
     setStatus("locked");
     setSyncStatus("idle");
+    clearAutofillCache().catch(() => {
+      // The native provider may not exist in Expo Go or on iOS.
+    });
   }, []);
 
   const legacyItems = useCallback(() => legacyItemsFrom(legacyRef.current), []);
@@ -364,6 +374,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
             ? autoLock
             : DEFAULT_AUTO_LOCK_MINUTES,
           biometricsEnabled: meta[META.biometricsEnabled] === "1",
+          autofillEnabled: meta[META.autofillEnabled] === "1",
           themeMode,
         };
         settingsRef.current = initialSettings;
@@ -432,6 +443,29 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
     return () => subscription.remove();
   }, [lock]);
+
+  /* --------------------------- system autofill ------------------------ */
+
+  useEffect(() => {
+    if (Platform.OS !== "android" || !hasNativeAutofill()) return;
+
+    if (status !== "unlocked" || !settings.autofillEnabled) {
+      clearAutofillCache().catch(() => {
+        // The cache is already absent, or the native module was removed.
+      });
+      return;
+    }
+
+    // Bulk changes (import, group rename) arrive in one React update. Debounce
+    // the native encryption so we write one cache instead of one per item.
+    const timer = setTimeout(() => {
+      configureAutofill(items).catch(() => {
+        // Do not break unlock or editing if the native cache cannot be written.
+      });
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [status, items, settings.autofillEnabled]);
 
   /* ----------------------------- onboarding ---------------------------- */
 
@@ -999,6 +1033,29 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     await setMeta(META.themeMode, value);
   }, []);
 
+  const setAutofillEnabled = useCallback(async (value: boolean) => {
+    if (value && !hasNativeAutofill()) {
+      throw new VaultError(
+        "invalid_input",
+        "System autofill requires the installed Android app, not Expo Go."
+      );
+    }
+
+    const next = { ...settingsRef.current, autofillEnabled: value };
+    settingsRef.current = next;
+    setSettings(next);
+    await setMeta(META.autofillEnabled, value ? "1" : "0");
+
+    if (!value) {
+      await clearAutofillCache();
+      return;
+    }
+
+    if (statusRef.current === "unlocked") {
+      await configureAutofill(itemsRef.current);
+    }
+  }, []);
+
   const enableBiometrics = useCallback(async (password: string) => {
     if (Platform.OS === "web") {
       throw new VaultError(
@@ -1085,6 +1142,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     await wipeDatabase();
     await setSessionToken(null);
     await setBiometricKey(null);
+    await clearAutofillCache().catch(() => {});
 
     keyRef.current = null;
     itemsRef.current = [];
@@ -1138,6 +1196,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       disableServerTotp,
       setAutoLockMinutes,
       setThemeMode,
+      setAutofillEnabled,
       enableBiometrics,
       disableBiometrics,
       exportBackup,
@@ -1174,6 +1233,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       disableServerTotp,
       setAutoLockMinutes,
       setThemeMode,
+      setAutofillEnabled,
       enableBiometrics,
       disableBiometrics,
       exportBackup,

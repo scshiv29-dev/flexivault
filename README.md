@@ -47,6 +47,9 @@ The mobile app works entirely offline. A server only adds multi-device sync.
 - Groups, favorites, search and type filters.
 - Biometric unlock (Face ID / fingerprint) with the derived key in the device
   keychain, background auto-lock (5/15/30 minutes or never), and lock-now.
+- Android system autofill for browser and native-app login forms: hostname or
+  package matching, a login-only encrypted cache, and a biometric/PIN check for
+  every fill. Requires a native APK; iOS autofill is not implemented.
 - Encrypted backup export (ciphertext + KDF parameters) and device reset.
 - Optional self-hosted sync with revision conflict detection.
 - Optional server-side TOTP as a second factor for sign-in.
@@ -356,9 +359,11 @@ use an EAS preview build; the seeded account and server URL work the same way.
 
 ## Known limitations
 
-- No system-wide mobile autofill yet. The app is not registered with Android's
-  `AutofillService` or iOS's credential provider, so it cannot fill fields in
-  other apps. See [`docs/AUTOFILL.md`](docs/AUTOFILL.md) for the native plan.
+- Android system autofill is implemented in the native app but must be verified
+  on a device; Expo Go cannot provide it. It fills only login username/password
+  pairs (not cards, identities or passkeys) and only the first detected pair in a
+  form. iOS autofill is not implemented. See
+  [`docs/AUTOFILL.md`](docs/AUTOFILL.md).
 - No sharing, organizations, collections, passkeys, or file attachments.
 - Single-node server only; in-memory rate limits do not span replicas.
 - No account deletion or password-change endpoint; manage the data directory
@@ -385,8 +390,8 @@ use an EAS preview build; the seeded account and server URL work the same way.
   Docker Compose, HTTPS, a persistent volume and backups.
 - [`docs/IMPORTING.md`](docs/IMPORTING.md) — supported CSV/JSON formats, field
   mapping, groups and safety notes.
-- [`docs/AUTOFILL.md`](docs/AUTOFILL.md) — Android/iOS system autofill
-  architecture, security requirements and phasing.
+- [`docs/AUTOFILL.md`](docs/AUTOFILL.md) — Android autofill implementation,
+  security model, testing steps and the iOS extension plan.
 - [`server/README.md`](server/README.md) — deployment, configuration, API,
   backup, security notes.
 - [`extension/README.md`](extension/README.md) — install, permissions, layout,

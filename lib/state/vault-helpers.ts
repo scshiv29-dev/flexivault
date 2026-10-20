@@ -20,6 +20,7 @@ export const META = {
   serverTotpEnabled: "server.totpEnabled",
   autoLockMinutes: "settings.autoLockMinutes",
   biometricsEnabled: "settings.biometricsEnabled",
+  autofillEnabled: "settings.autofillEnabled",
   themeMode: "settings.themeMode",
 } as const;
 

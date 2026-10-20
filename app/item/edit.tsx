@@ -26,6 +26,11 @@ import {
   type PasswordOptions,
 } from "@/lib/vault/generator";
 import { groupNames } from "@/lib/vault/groups";
+import {
+  isAndroidPackageName,
+  MAX_ANDROID_PACKAGES,
+  parseAndroidPackages,
+} from "@/lib/vault/autofill";
 import { isValidBase32, normaliseBase32, base32Decode } from "@/lib/vault/otp";
 import type {
   TotpAlgorithm,
@@ -91,6 +96,9 @@ export default function EditItemScreen() {
   const [favorite, setFavorite] = useState(Boolean(existing?.favorite));
   const [notes, setNotes] = useState(existing?.notes ?? "");
   const [url, setUrl] = useState(existing?.urls?.[0] ?? "");
+  const [androidPackages, setAndroidPackages] = useState(
+    existing?.androidPackages?.join(", ") ?? ""
+  );
 
   const [username, setUsername] = useState(existing?.username ?? "");
   const [password, setPassword] = useState(existing?.password ?? "");
@@ -181,6 +189,26 @@ export default function EditItemScreen() {
       return;
     }
 
+    let packages: string[] = [];
+    if (type === "login" && androidPackages.trim()) {
+      const tokens = androidPackages
+        .split(/[\s,;]+/)
+        .map((token) => token.trim())
+        .filter(Boolean);
+      const invalid = tokens.find((token) => !isAndroidPackageName(token));
+      if (invalid) {
+        setError(
+          `"${invalid}" is not a valid Android package name. Use a value like com.example.app.`
+        );
+        return;
+      }
+      if (new Set(tokens).size > MAX_ANDROID_PACKAGES) {
+        setError(`Use at most ${MAX_ANDROID_PACKAGES} Android package names.`);
+        return;
+      }
+      packages = parseAndroidPackages(androidPackages);
+    }
+
     const draft: NewVaultItem = {
       type,
       name: name.trim(),
@@ -194,6 +222,7 @@ export default function EditItemScreen() {
     if (type === "login") {
       draft.username = username.trim() || undefined;
       draft.password = password || undefined;
+      draft.androidPackages = packages.length > 0 ? packages : undefined;
     }
 
     if (type === "totp") {
@@ -380,6 +409,15 @@ export default function EditItemScreen() {
               icon="globe"
               keyboardType="url"
               autoComplete="url"
+            />
+            <Field
+              label="ANDROID APP PACKAGE (OPTIONAL)"
+              value={androidPackages}
+              onChangeText={setAndroidPackages}
+              placeholder="com.example.app"
+              icon="smartphone"
+              autoCapitalize="none"
+              hint="Used for autofill in native Android apps. Find it in the app's Play Store URL after id=, or in Android app info."
             />
           </>
         ) : null}

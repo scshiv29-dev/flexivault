@@ -170,6 +170,10 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+    // Used by the autofill authentication activity. expo-local-authentication
+    // already brings this in; declaring it here keeps the native module
+    // compilable if that dependency changes.
+    implementation("androidx.biometric:biometric:1.2.0-alpha04")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

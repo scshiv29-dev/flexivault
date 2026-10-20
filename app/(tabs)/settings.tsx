@@ -1,8 +1,9 @@
 import { Feather } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
-import { useState, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import {
+  AppState,
   Platform,
   Pressable,
   Share,
@@ -21,6 +22,11 @@ import { Screen } from "@/components/ui/Screen";
 import { Sheet } from "@/components/ui/Sheet";
 import { useToast } from "@/components/ui/Toast";
 import { relativeTime, serverHost } from "@/lib/format";
+import {
+  isAutofillAvailable,
+  isAutofillEnabledOnDevice,
+  openAutofillSettings,
+} from "@/lib/native/autofill";
 import { useVault } from "@/lib/state/vault-provider";
 import { useAppTheme } from "@/lib/theme";
 import type { ThemeMode } from "@/lib/vault/types";
@@ -166,6 +172,7 @@ export default function SettingsScreen() {
     disconnectServer,
     setAutoLockMinutes,
     setThemeMode,
+    setAutofillEnabled,
     enableBiometrics,
     disableBiometrics,
     exportBackup,
@@ -182,6 +189,33 @@ export default function SettingsScreen() {
   const [bioError, setBioError] = useState<string | null>(null);
   const [bioBusy, setBioBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [autofillAvailable, setAutofillAvailable] = useState(false);
+  const [autofillDeviceEnabled, setAutofillDeviceEnabled] = useState(false);
+  const [autofillBusy, setAutofillBusy] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    let cancelled = false;
+
+    const refresh = () => {
+      isAutofillAvailable().then((available) => {
+        if (!cancelled) setAutofillAvailable(available);
+      });
+      isAutofillEnabledOnDevice().then((enabled) => {
+        if (!cancelled) setAutofillDeviceEnabled(enabled);
+      });
+    };
+
+    refresh();
+    const subscription = AppState.addEventListener("change", (next) => {
+      if (next === "active") refresh();
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.remove();
+    };
+  }, []);
 
   const autoLockLabel =
     settings.autoLockMinutes === 0
@@ -239,6 +273,37 @@ export default function SettingsScreen() {
       setBioError((caught as Error).message);
     } finally {
       setBioBusy(false);
+    }
+  };
+
+  const toggleAutofill = async (next: boolean) => {
+    setAutofillBusy(true);
+    try {
+      await setAutofillEnabled(next);
+      if (next) {
+        const enabled = await isAutofillEnabledOnDevice();
+        setAutofillDeviceEnabled(enabled);
+        toast.show(
+          enabled
+            ? "System autofill enabled"
+            : "Autofill cache ready. Choose FlexiVault in Android settings.",
+          "success"
+        );
+      } else {
+        toast.show("System autofill disabled");
+      }
+    } catch (caught) {
+      toast.show((caught as Error).message, "danger");
+    } finally {
+      setAutofillBusy(false);
+    }
+  };
+
+  const openAndroidAutofill = async () => {
+    try {
+      await openAutofillSettings();
+    } catch (caught) {
+      toast.show((caught as Error).message, "danger");
     }
   };
 
@@ -428,6 +493,40 @@ export default function SettingsScreen() {
               />
             }
           />
+        ) : null}
+        {Platform.OS === "android" ? (
+          <>
+            <SettingRow
+              icon="smartphone"
+              title="System autofill"
+              subtitle={
+                autofillAvailable
+                  ? autofillDeviceEnabled
+                    ? "Fill logins in other apps after a biometric check"
+                    : "Cache logins, then choose FlexiVault in Android settings"
+                  : "Install the native Android build; Expo Go cannot provide autofill"
+              }
+              right={
+                <Toggle
+                  value={settings.autofillEnabled}
+                  onChange={toggleAutofill}
+                  disabled={!autofillAvailable || autofillBusy}
+                />
+              }
+            />
+            {autofillAvailable ? (
+              <SettingRow
+                icon="settings"
+                title="Android autofill settings"
+                subtitle={
+                  autofillDeviceEnabled
+                    ? "FlexiVault is the selected autofill service"
+                    : "Choose FlexiVault as your autofill service"
+                }
+                onPress={openAndroidAutofill}
+              />
+            ) : null}
+          </>
         ) : null}
         <SettingRow
           icon="key"

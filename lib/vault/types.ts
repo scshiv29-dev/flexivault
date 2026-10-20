@@ -36,6 +36,8 @@ export interface VaultItem {
   username?: string;
   password?: string;
   urls?: string[];
+  /** Android package names that may receive this login through autofill. */
+  androidPackages?: string[];
   notes?: string;
   totp?: TotpConfig | null;
   card?: CardDetails;
@@ -75,6 +77,7 @@ export type ThemeMode = "system" | "light" | "dark";
 export interface VaultSettings {
   autoLockMinutes: number;
   biometricsEnabled: boolean;
+  autofillEnabled: boolean;
   themeMode: ThemeMode;
 }
 
