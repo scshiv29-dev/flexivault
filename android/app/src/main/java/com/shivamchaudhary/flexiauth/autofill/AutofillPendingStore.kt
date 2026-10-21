@@ -83,7 +83,9 @@ object AutofillPendingStore {
   fun clear(context: Context, ids: Set<String>? = null) {
     val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     if (ids == null) {
-      prefs.edit().remove(KEY_PAYLOAD).apply()
+      check(prefs.edit().remove(KEY_PAYLOAD).commit()) {
+        "Could not clear the autofill pending queue."
+      }
       return
     }
     try {

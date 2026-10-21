@@ -95,6 +95,16 @@ class FlexiVaultAutofillModule(
   }
 
   @ReactMethod
+  fun clearAllPendingSaves(promise: Promise) {
+    try {
+      AutofillPendingStore.clear(reactContext)
+      promise.resolve(null)
+    } catch (exception: Exception) {
+      promise.reject("autofill_pending_clear_failed", exception.message, exception)
+    }
+  }
+
+  @ReactMethod
   fun clearPendingSaves(ids: ReadableArray, promise: Promise) {
     try {
       val selected = HashSet<String>()

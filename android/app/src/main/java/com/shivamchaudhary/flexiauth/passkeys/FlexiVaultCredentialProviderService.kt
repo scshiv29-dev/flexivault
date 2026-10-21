@@ -168,9 +168,11 @@ class FlexiVaultCredentialProviderService : CredentialProviderService() {
   ): PendingIntent {
     val intent = Intent(this, PasskeyActivity::class.java).apply {
       this.action = action
-      // Unique data keeps two credential IDs with the same String hash from
-      // updating each other's PendingIntent extras.
-      data = Uri.parse("flexivault://passkey/$action/${credentialId ?: "create"}")
+      // Include the option as well as the credential: one credential can match
+      // several options, and those entries must not overwrite each other's extras.
+      data = Uri.parse(
+        "flexivault://passkey/$action/${credentialId ?: "create"}/${optionIndex ?: -1}"
+      )
       setPackage(packageName)
       if (credentialId != null) putExtra(EXTRA_CREDENTIAL_ID, credentialId)
       if (optionIndex != null) putExtra(EXTRA_OPTION_INDEX, optionIndex)

@@ -14,6 +14,7 @@ interface NativeAutofillModule {
   clear(): Promise<void>;
   openSettings(): Promise<void>;
   readPendingSaves(): Promise<string>;
+  clearAllPendingSaves(): Promise<void>;
   clearPendingSaves(ids: string[]): Promise<void>;
 }
 
@@ -70,6 +71,11 @@ export async function readPendingAutofillSaves(): Promise<PendingAutofillSave[]>
 export async function clearPendingAutofillSaves(ids: string[]): Promise<void> {
   if (!nativeModule || ids.length === 0) return;
   await nativeModule.clearPendingSaves(ids);
+}
+
+export async function clearAllPendingAutofillSaves(): Promise<void> {
+  if (!nativeModule) return;
+  await nativeModule.clearAllPendingSaves();
 }
 
 export async function openAutofillSettings(): Promise<void> {

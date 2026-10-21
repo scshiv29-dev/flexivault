@@ -12,6 +12,7 @@ import {
 import { AppState, Platform } from "react-native";
 
 import {
+  clearAllPendingAutofillSaves,
   clearAutofillCache,
   clearPendingAutofillSaves,
   configureAutofill,
@@ -1302,15 +1303,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       clearTimeout(syncTimerRef.current);
       syncTimerRef.current = null;
     }
+    // Reset removes the entire queue, including entries JS cannot parse. Stop
+    // before wiping the vault if native storage cannot persist the removal.
+    await clearAllPendingAutofillSaves();
     await wipeDatabase();
     await setSessionToken(null);
     await setBiometricKey(null);
-    const pendingSaves = await readPendingAutofillSaves();
-    if (pendingSaves.length > 0) {
-      await clearPendingAutofillSaves(
-        pendingSaves.map((save) => save.itemId),
-      ).catch(() => {});
-    }
     await clearAutofillCache().catch(() => {});
     await clearNativePasskeys().catch(() => {});
 
