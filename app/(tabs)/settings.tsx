@@ -683,7 +683,7 @@ export default function SettingsScreen() {
         <SettingRow icon="shield" title="Encryption" right={<AppText variant="small">AES-256-GCM</AppText>} />
         <SettingRow icon="hash" title="Key derivation" right={<AppText variant="small">PBKDF2 · 210k</AppText>} />
         <SettingRow icon="cloud" title="Sync" right={<AppText variant="small">Self-hosted</AppText>} />
-        <SettingRow icon="info" title="Version" right={<AppText variant="small">{Constants.expoConfig?.version ?? "1.1.0"}</AppText>} last />
+        <SettingRow icon="info" title="Version" right={<AppText variant="small">{Constants.expoConfig?.version ?? "1.0.3"}</AppText>} last />
       </Card>
 
       <AppText
