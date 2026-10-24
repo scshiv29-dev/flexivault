@@ -219,6 +219,9 @@ jobs:
               popup.css \
               popup.js \
               vault.html \
+              unlock.html \
+              unlock.css \
+              unlock.js \
               src \
               fonts \
               icons

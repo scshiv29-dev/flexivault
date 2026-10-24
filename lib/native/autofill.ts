@@ -12,6 +12,7 @@ interface NativeAutofillModule {
   isEnabled(): Promise<boolean>;
   configure(payload: string): Promise<void>;
   clear(): Promise<void>;
+  lock(): Promise<void>;
   openSettings(): Promise<void>;
   readPendingSaves(): Promise<string>;
   clearAllPendingSaves(): Promise<void>;
@@ -56,6 +57,11 @@ export async function configureAutofill(items: VaultItem[]): Promise<void> {
 export async function clearAutofillCache(): Promise<void> {
   if (!nativeModule) return;
   await nativeModule.clear();
+}
+
+export async function lockAutofill(): Promise<void> {
+  if (!nativeModule) return;
+  await nativeModule.lock();
 }
 
 export async function readPendingAutofillSaves(): Promise<PendingAutofillSave[]> {

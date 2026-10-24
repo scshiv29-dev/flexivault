@@ -59,9 +59,12 @@ class FlexiVaultAutofillModule(
 
   @ReactMethod
   fun configure(payload: String, promise: Promise) {
+    val epoch = AutofillSession.epoch()
     Thread {
       try {
-        AutofillCache.write(reactContext, payload)
+        AutofillSession.configure(epoch, AutofillVaultReader.autoLockMinutes(reactContext)) {
+          AutofillCache.write(reactContext, payload)
+        }
         promise.resolve(null)
       } catch (exception: Exception) {
         promise.reject("autofill_cache_failed", exception.message, exception)
@@ -70,8 +73,15 @@ class FlexiVaultAutofillModule(
   }
 
   @ReactMethod
+  fun lock(promise: Promise) {
+    AutofillSession.lock()
+    promise.resolve(null)
+  }
+
+  @ReactMethod
   fun clear(promise: Promise) {
     try {
+      AutofillSession.lock()
       AutofillCache.clear(reactContext)
       promise.resolve(null)
     } catch (exception: Exception) {

@@ -54,9 +54,11 @@ The mobile app works entirely offline. A server only adds multi-device sync.
 - Android system autofill for browser and native-app login forms: hostname
   matching, explicit package matching plus app-label/token inference, a
   login-only encrypted cache, and a biometric/PIN check that appears over the
-  app being filled. Save/update prompts appear over the app being filled and
-  queue locked-vault saves in a Keystore-encrypted store. Requires a native APK;
-  iOS autofill is not implemented.
+  app being filled. When locked, the picker offers **Unlock FlexiVault**; the
+  user can enter the master password, pass device authentication and choose a
+  login without bringing the main app forward. Save/update prompts appear over
+  the app being filled and queue locked-vault saves in a Keystore-encrypted
+  store. Requires a native APK; iOS autofill is not implemented.
 - Android 14+ passkeys: FlexiVault can create and assert synced P-256 passkeys
   through Android's Credential Manager, with every signature gated by a
   biometric/PIN check. Passkeys sync as encrypted vault items and are mirrored
@@ -72,6 +74,9 @@ The mobile app works entirely offline. A server only adds multi-device sync.
   dedicated responsive full-page tab.
 - Inline suggestions on matching login fields. Choosing one fills the form
   without opening the toolbar popup.
+- A locked form shows **Unlock FlexiVault**. It opens a small browser-owned,
+  extension-origin unlock window, then returns to the same form and shows its
+  matching logins; the website never receives the master password.
 - Inline live TOTP suggestions on `autocomplete="one-time-code"` and other
   recognisable code fields.
 - Reveal/copy passwords, card data, identities and notes.

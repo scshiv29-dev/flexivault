@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Unlock FlexiVault</title>
+    <link rel="stylesheet" href="unlock.css" />
+  </head>
+  <body>
+    <!-- Local extension-owned unlock surface; never put a master-password
+         input in the website DOM or send keys back to the parent frame. -->
+    <main>
+      <h1>Unlock FlexiVault</h1>
+      <p id="target">Checking this form…</p>
+      <form id="unlock-form">
+        <label for="master-password">Master password</label>
+        <input id="master-password" type="password" autocomplete="off" maxlength="4096" required disabled />
+        <p id="status" role="status" aria-live="polite"></p>
+        <div class="actions">
+          <button id="cancel" type="button">Not now</button>
+          <button id="unlock" type="submit" disabled>Unlock</button>
+        </div>
+      </form>
+      <p class="note">Secure FlexiVault window. Your master password stays in the extension, not the website.</p>
+    </main>
+    <script type="module" src="unlock.js"></script>
+  </body>
+</html>

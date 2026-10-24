@@ -3,6 +3,7 @@ package com.shivamchaudhary.flexiauth.autofill
 import android.app.PendingIntent
 import android.app.assist.AssistStructure
 import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.CancellationSignal
@@ -47,7 +48,8 @@ class FlexiVaultAutofillService : AutofillService() {
       // availability for filling. A new vault can therefore capture a login on
       // the first form submission, before any item has been cached.
       val canFill = AutofillAuthActivity.canAuthenticate(this)
-      val logins = AutofillPendingStore.apply(this, AutofillCache.read(this))
+      val unlocked = AutofillSession.isUnlocked()
+      val logins = if (unlocked) AutofillPendingStore.apply(this, AutofillCache.read(this)) else emptyList()
 
       // Resolve the app label for native apps, including WebView-based ones
       // that expose a web domain.
@@ -68,6 +70,9 @@ class FlexiVaultAutofillService : AutofillService() {
 
       val response = FillResponse.Builder()
       var added = 0
+      if ((!unlocked || logins.isEmpty()) && canFill && AutofillVaultReader.canUnlock(this)) {
+        buildUnlockDataset(fields)?.let { response.addDataset(it); added += 1 }
+      }
       matches.forEachIndexed { index, login ->
         val dataset = try {
           buildDataset(login, fields, index)
@@ -226,10 +231,12 @@ class FlexiVaultAutofillService : AutofillService() {
     if (values == 0) return null
 
     val intent = Intent(this, AutofillAuthActivity::class.java).apply {
+      data = Uri.parse("flexivault://autofill/${UUID.randomUUID()}")
       putExtra(AutofillAuthActivity.EXTRA_LOGIN_ID, login.id)
       putExtra(AutofillAuthActivity.EXTRA_LOGIN_NAME, login.name)
       putExtra(AutofillAuthActivity.EXTRA_USERNAME_ID, fields.usernameId)
       putExtra(AutofillAuthActivity.EXTRA_PASSWORD_ID, fields.passwordId)
+      putExtra(AutofillAuthActivity.EXTRA_TARGET_PACKAGE, fields.packageName)
       putExtra(
         AutofillAuthActivity.EXTRA_WEB_DOMAIN,
         fields.webDomain.takeIf { AutofillMatcher.isBrowserPackage(fields.packageName) },
@@ -252,6 +259,27 @@ class FlexiVaultAutofillService : AutofillService() {
         }),
     )
     builder.setAuthentication(pendingIntent.intentSender)
+    return builder.build()
+  }
+
+  private fun buildUnlockDataset(fields: AutofillFields): Dataset? {
+    val presentation = AutofillPresentation.unlock(this)
+    val builder = Dataset.Builder(presentation)
+    fields.usernameId?.let { builder.setValue(it, null, presentation) }
+    fields.passwordId?.let { builder.setValue(it, null, presentation) }
+    if (fields.usernameId == null && fields.passwordId == null) return null
+    val intent = Intent(this, AutofillAuthActivity::class.java).apply {
+      data = Uri.parse("flexivault://autofill-unlock/${UUID.randomUUID()}")
+      putExtra(AutofillAuthActivity.EXTRA_UNLOCK, true)
+      putExtra(AutofillAuthActivity.EXTRA_USERNAME_ID, fields.usernameId)
+      putExtra(AutofillAuthActivity.EXTRA_PASSWORD_ID, fields.passwordId)
+      putExtra(AutofillAuthActivity.EXTRA_TARGET_PACKAGE, fields.packageName)
+      putExtra(AutofillAuthActivity.EXTRA_WEB_DOMAIN, fields.webDomain)
+    }
+    val pending = PendingIntent.getActivity(this, 4900, intent,
+      PendingIntent.FLAG_CANCEL_CURRENT or
+        (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0))
+    builder.setAuthentication(pending.intentSender)
     return builder.build()
   }
 

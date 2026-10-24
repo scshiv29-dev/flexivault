@@ -10,6 +10,7 @@ import {
 import { generateTotp } from "./src/otp.js";
 import { sameSite, siteHost } from "./src/presentation.js";
 import { pushDirtyCache } from "./src/sync.js";
+import { unlockCachedVault } from "./src/inline-unlock.js";
 import {
   CACHE_KEY,
   CONFIG_KEY,
@@ -29,6 +30,142 @@ let lastTouchAt = 0;
 // Passwords and TOTP secrets are decrypted per fill; every read still requires
 // a fresh unlocked session, and cache changes or lock events clear this.
 let decryptedVault = null;
+const UNLOCK_PREFIX = "flexivault.inline-unlock.";
+const UNLOCK_TTL_MS = 2 * 60 * 1000;
+let unlockEpoch = 0;
+const unlocking = new Set();
+
+async function invalidateUnlockTickets() {
+  const all = await chrome.storage.session.get(null);
+  const names = Object.keys(all).filter((name) => name.startsWith(UNLOCK_PREFIX));
+  if (names.length) await chrome.storage.session.remove(names);
+  for (const name of names) {
+    const ticket = all[name];
+    const options = ticket.documentId ? { documentId: ticket.documentId } : { frameId: ticket.frameId };
+    await chrome.tabs.sendMessage(ticket.tabId, {
+      type: "flexivault:unlock-complete",
+      token: name.slice(UNLOCK_PREFIX.length),
+      unlocked: false,
+    }, options).catch(() => {});
+    if (Number.isInteger(ticket.unlockWindowId)) {
+      await chrome.windows.remove(ticket.unlockWindowId).catch(() => {});
+    }
+  }
+}
+
+function configIdentity(config) {
+  return JSON.stringify([config?.serverUrl, config?.email, config?.kdfSalt,
+    config?.kdfIterations, config?.keyCheck]);
+}
+
+async function beginInlineUnlock(sender) {
+  if (senderTabId(sender) == null || (sender.frameId ?? 0) !== 0) {
+    return { ok: false, error: "Unlock from the main page's login form." };
+  }
+  const stored = await local.get(CONFIG_KEY);
+  const config = stored[CONFIG_KEY];
+  if (!config?.keyCheck) {
+    return { ok: false, error: "Connect your vault in the extension first." };
+  }
+  const token = newItemId();
+  const tabId = senderTabId(sender);
+  const key = `${UNLOCK_PREFIX}${token}`;
+  // Only one active unlock per tab. Prune old capabilities on each request.
+  const all = await chrome.storage.session.get(null);
+  const old = Object.keys(all).filter((name) => name.startsWith(UNLOCK_PREFIX) &&
+    (all[name].tabId === tabId || Date.now() - all[name].createdAt >= UNLOCK_TTL_MS));
+  for (const name of old) {
+    const windowId = all[name]?.unlockWindowId;
+    if (Number.isInteger(windowId)) await chrome.windows.remove(windowId).catch(() => {});
+  }
+  if (old.length) await chrome.storage.session.remove(old);
+  await chrome.storage.session.set({ [key]: {
+    tabId, frameId: sender.frameId ?? 0, documentId: sender.documentId ?? null,
+    pageUrl: sender.url ?? sender.tab.url, createdAt: Date.now(),
+    identity: configIdentity(config), unlockWindowId: null,
+  } });
+  try {
+    const unlockWindow = await chrome.windows.create({
+      url: `${chrome.runtime.getURL("unlock.html")}#${token}`,
+      type: "popup",
+      width: 400,
+      height: 500,
+      focused: true,
+    });
+    const ticket = (await chrome.storage.session.get(key))[key];
+    if (!ticket || !Number.isInteger(unlockWindow.id)) throw new Error("Could not open unlock.");
+    ticket.unlockWindowId = unlockWindow.id;
+    await chrome.storage.session.set({ [key]: ticket });
+  } catch (error) {
+    await chrome.storage.session.remove(key);
+    throw error;
+  }
+  return { ok: true, token };
+}
+
+async function unlockTicket(message, sender) {
+  // Website content scripts can request a window but cannot submit passwords,
+  // access configuration or unlock the session. Only our own extension page can.
+  const ownUrl = chrome.runtime.getURL("unlock.html");
+  if (sender.id !== chrome.runtime.id || sender.url?.split(/[?#]/)[0] !== ownUrl ||
+      sender.frameId !== 0) {
+    throw new Error("Use the secure FlexiVault unlock window.");
+  }
+  const key = `${UNLOCK_PREFIX}${String(message.token ?? "")}`;
+  const ticket = (await chrome.storage.session.get(key))[key];
+  if (ticket?.unlockWindowId === null && Number.isInteger(sender.tab?.windowId)) {
+    // The extension page can load just before windows.create() resolves. The
+    // unguessable capability binds that first trusted top-level window.
+    ticket.unlockWindowId = sender.tab.windowId;
+    await chrome.storage.session.set({ [key]: ticket });
+  }
+  if (!ticket || ticket.unlockWindowId !== sender.tab?.windowId ||
+      Date.now() - ticket.createdAt >= UNLOCK_TTL_MS ||
+      ticket.frameId !== 0) {
+    throw new Error("This unlock request expired. Click Unlock FlexiVault again.");
+  }
+  const tab = await chrome.tabs.get(ticket.tabId);
+  const config = (await local.get(CONFIG_KEY))[CONFIG_KEY];
+  if (tab.url !== ticket.pageUrl || configIdentity(config) !== ticket.identity) {
+    throw new Error("The page or vault changed. Start unlock again.");
+  }
+  return { key, ticket, config };
+}
+
+async function handleInlineUnlock(message, sender) {
+  const { key, ticket, config } = await unlockTicket(message, sender);
+  if (message.type === "flexivault:unlock-info") {
+    return { ok: true, host: senderHost({ url: ticket.pageUrl }) };
+  }
+  if (message.type === "flexivault:unlock-cancel") {
+    await chrome.storage.session.remove(key);
+  } else {
+    if (unlocking.has(key)) return { ok: false, error: "Unlock is already in progress." };
+    unlocking.add(key);
+    const epoch = unlockEpoch;
+    try {
+      const cache = (await local.get(CACHE_KEY))[CACHE_KEY];
+      const encryptionKeyB64 = await unlockCachedVault(config, cache, message.password);
+      // Revalidate after the expensive KDF: cancel, navigation, disconnect and
+      // explicit lock must not be undone by an in-flight unlock.
+      await unlockTicket(message, sender);
+      if (epoch !== unlockEpoch) throw new Error("The vault was locked. Start unlock again.");
+      const current = await session.get();
+      await session.set({ encryptionKeyB64, token: current?.token ?? null,
+        unlockedAt: Date.now(), lastActiveAt: Date.now() });
+      decryptedVault = null;
+      await chrome.storage.session.remove(key);
+    } finally {
+      unlocking.delete(key);
+    }
+  }
+  const options = ticket.documentId ? { documentId: ticket.documentId } : { frameId: ticket.frameId };
+  await chrome.tabs.sendMessage(ticket.tabId, {
+    type: "flexivault:unlock-complete", token: message.token,
+    unlocked: message.type === "flexivault:unlock-submit",
+  }, options).catch(() => {});
+  return { ok: true };
+}
 
 function senderHost(sender) {
   const raw = sender?.url ?? sender?.tab?.url ?? "";
@@ -505,9 +642,26 @@ async function touch() {
 }
 
 async function handle(message, sender) {
+  if (["flexivault:unlock-info", "flexivault:unlock-submit", "flexivault:unlock-cancel"].includes(message.type)) {
+    return handleInlineUnlock(message, sender);
+  }
   const host = senderHost(sender);
   if (!host) {
     return { ok: false, error: "This page cannot request vault data." };
+  }
+
+  if (message.type === "flexivault:unlock-open") return beginInlineUnlock(sender);
+  if (message.type === "flexivault:unlock-close") {
+    const key = `${UNLOCK_PREFIX}${String(message.token ?? "")}`;
+    const ticket = (await chrome.storage.session.get(key))[key];
+    if (ticket?.tabId === senderTabId(sender) && ticket.pageUrl === sender.url &&
+        ticket.frameId === (sender.frameId ?? 0)) {
+      await chrome.storage.session.remove(key);
+      if (Number.isInteger(ticket.unlockWindowId)) {
+        await chrome.windows.remove(ticket.unlockWindowId).catch(() => {});
+      }
+    }
+    return { ok: true };
   }
 
   if (message.type === "flexivault:suggest") {
@@ -608,6 +762,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     message?.type !== "flexivault:pending-save" &&
     message?.type !== "flexivault:save" &&
     message?.type !== "flexivault:dismiss-save"
+    && message?.type !== "flexivault:unlock-open"
+    && message?.type !== "flexivault:unlock-info"
+    && message?.type !== "flexivault:unlock-submit"
+    && message?.type !== "flexivault:unlock-cancel"
+    && message?.type !== "flexivault:unlock-close"
   ) {
     return undefined;
   }
@@ -624,6 +783,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.storage?.onChanged?.addListener((changes, area) => {
   if (area === "local" && (changes[CACHE_KEY] || changes[CONFIG_KEY])) {
     decryptedVault = null;
+    if (changes[CONFIG_KEY]) {
+      unlockEpoch += 1;
+      void invalidateUnlockTickets();
+    }
   }
   if (
     area === "session" &&
@@ -631,9 +794,29 @@ chrome.storage?.onChanged?.addListener((changes, area) => {
     !changes[SESSION_KEY].newValue?.encryptionKeyB64
   ) {
     decryptedVault = null;
+    unlockEpoch += 1;
+    void invalidateUnlockTickets();
   }
 });
 
 chrome.runtime.onSuspend?.addListener(() => {
   decryptedVault = null;
+});
+
+chrome.windows?.onRemoved?.addListener((windowId) => {
+  void (async () => {
+    const all = await chrome.storage.session.get(null);
+    const names = Object.keys(all).filter((name) =>
+      name.startsWith(UNLOCK_PREFIX) && all[name]?.unlockWindowId === windowId);
+    for (const name of names) {
+      const ticket = all[name];
+      await chrome.storage.session.remove(name);
+      const options = ticket.documentId ? { documentId: ticket.documentId } : { frameId: ticket.frameId };
+      await chrome.tabs.sendMessage(ticket.tabId, {
+        type: "flexivault:unlock-complete",
+        token: name.slice(UNLOCK_PREFIX.length),
+        unlocked: false,
+      }, options).catch(() => {});
+    }
+  })();
 });

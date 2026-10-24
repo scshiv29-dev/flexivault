@@ -93,6 +93,8 @@ const suggestionItems = {
     },
   ],
 };
+let vaultLocked = false;
+let unlockOpenRequests = 0;
 
 window.chrome = {
   runtime: {
@@ -107,8 +109,8 @@ window.chrome = {
         return {
           ok: true,
           configured: true,
-          locked: false,
-          items: suggestionItems[message.kind] ?? [],
+          locked: vaultLocked,
+          items: vaultLocked ? [] : suggestionItems[message.kind] ?? [],
         };
       }
       if (message.type === "flexivault:suggest-fill") {
@@ -119,6 +121,10 @@ window.chrome = {
           username: "ada@example.com",
           password: "s3cret-value",
         };
+      }
+      if (message.type === "flexivault:unlock-open") {
+        unlockOpenRequests += 1;
+        return { ok: true, token: "test-unlock" };
       }
       return { ok: false };
     },
@@ -261,6 +267,17 @@ assert.equal(
   0,
   "the email-only step fills only the username"
 );
+
+vaultLocked = true;
+await focusField(window.document.getElementById("email"));
+assert.ok(suggestionRoot.textContent.includes("Unlock FlexiVault"), "locked form offers an unlock action");
+assert.ok(!suggestionRoot.textContent.includes("ada@example.com"), "locked panel reveals no saved usernames");
+assert.ok(!suggestionRoot.querySelector('input[type="password"]'), "master-password input is never inserted into the website DOM");
+suggestionRoot.querySelector(".row").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+await wait(30);
+assert.equal(unlockOpenRequests, 0, "synthetic clicks cannot launch a secure unlock window");
+assert.equal(fillRequests.length, 4, "locked action never requests a credential fill");
+vaultLocked = false;
 
 // A signup form alone must not receive an existing password.
 window.document.getElementById("login").remove();

@@ -19,18 +19,21 @@ covered by the same project and the same principles.
 - **Vault item contents.** Items can include logins, secure notes, payment
   cards, identities and authenticator codes. They are decrypted locally only
   when you open, reveal or copy an item.
-- **Session data.** A bearer token is stored in `chrome.storage.local`; the
-  derived vault key is kept in memory-backed `chrome.storage.session`. Locking
-  drops the key. The token allows a silent re-authentication after the idle
-  timeout.
-- **Master password.** The master password is entered in the popup or full-page
-  view and processed locally with PBKDF2-SHA256. It is never sent to the server.
-  A derived authentication verifier is sent to your server to sign in.
+- **Session data.** The bearer token and derived vault key are kept in
+  memory-backed `chrome.storage.session`. Locking drops the key but retains the
+  token for silent re-authentication; closing the browser clears both.
+- **Master password.** The master password is entered only in trusted extension
+  pages: the popup, full-page view, or the browser-owned unlock window opened by
+  a locked form. It is processed locally with PBKDF2-SHA256 and never exposed to
+  the website. Popup/full-page sign-in sends a derived authentication verifier
+  to your server; form unlock validates the local key check and encrypted cache
+  without sending an authentication request.
 - **Web page data.** The content script reads the active hostname and the login
   or one-time-code field types needed to match a saved item and fill a form.
   Passwords and TOTP codes are returned to the page only after you explicitly
   choose an item. The content script does not receive secrets while suggestions
-  are being listed. After a trusted form submit, it sends the submitted username
+  are being listed. While locked, it receives no vault item names, usernames or
+  IDs—only that a configured vault is locked. After a trusted form submit, it sends the submitted username
   and password to the background worker only to decide whether to offer a
   save/update prompt. The pending pair is encrypted with the vault key and kept
   in memory-backed `chrome.storage.session` for up to five minutes so the prompt

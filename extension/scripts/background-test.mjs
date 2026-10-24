@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 
-import { bytesToBase64, encryptItem, importVaultKey } from "../src/crypto.js";
+import { bytesToBase64, deriveKeys, encryptItem, importVaultKey, keyCheck } from "../src/crypto.js";
 import { generateTotp } from "../src/otp.js";
 import { CACHE_KEY, CONFIG_KEY, SESSION_KEY } from "../src/store.js";
 
@@ -39,10 +39,32 @@ function area() {
 const localArea = area();
 const sessionArea = area();
 let listener = null;
+const unlockNotifications = [];
+let activeTabUrl = "https://acme.test/login";
+let changeListener = null;
+let nextWindowId = 500;
+let activeUnlockWindowId = null;
+const removedWindows = [];
+let windowRemovedListener = null;
 
 globalThis.chrome = {
-  storage: { local: localArea, session: sessionArea },
+  storage: { local: localArea, session: sessionArea,
+    onChanged: { addListener(handler) { changeListener = handler; } } },
+  tabs: {
+    async get(id) { return { id, url: activeTabUrl }; },
+    async sendMessage(id, message, options) { unlockNotifications.push({ id, message, options }); },
+  },
+  windows: {
+    async create() {
+      activeUnlockWindowId = ++nextWindowId;
+      return { id: activeUnlockWindowId };
+    },
+    async remove(id) { removedWindows.push(id); },
+    onRemoved: { addListener(handler) { windowRemovedListener = handler; } },
+  },
   runtime: {
+    id: "flexivault-test",
+    getURL(path) { return `chrome-extension://flexivault-test/${path}`; },
     onMessage: {
       addListener(handler) {
         listener = handler;
@@ -388,5 +410,80 @@ response = await request(
   { url: "chrome-extension://flexivault/vault.html" }
 );
 assert.equal(response.ok, false, "non-http senders cannot read the vault");
+
+// Form unlock is a capability-scoped, extension-origin interaction. A content
+// script may request the window, but cannot submit a master password to unlock.
+const master = "correct horse battery staple";
+const salt = bytesToBase64(new Uint8Array(16).fill(42));
+const derived = await deriveKeys(master, salt, 210000);
+const inlineKey = await importVaultKey(derived.encryptionKey);
+const offlineCache = { items: [{ id: loginItem.id, data: await encryptItem(inlineKey, loginItem) }], dirty: true, revision: 3 };
+await localArea.set({ [CONFIG_KEY]: { serverUrl: "https://vault.test", email: "ada@example.com",
+  kdfSalt: salt, kdfIterations: 210000, keyCheck: await keyCheck(derived.encryptionKey) }, [CACHE_KEY]: offlineCache });
+await sessionArea.set({ [SESSION_KEY]: { token: "retained-token" } });
+const page = { url: activeTabUrl, frameId: 0, documentId: "login-document", tab: { id: 1, url: activeTabUrl } };
+const unlockSender = (overrides = {}) => ({
+  id: "flexivault-test",
+  url: chrome.runtime.getURL("unlock.html"),
+  frameId: 0,
+  tab: { id: 900 + activeUnlockWindowId, windowId: activeUnlockWindowId },
+  ...overrides,
+});
+const begin = () => request({ type: "flexivault:unlock-open" }, page);
+response = await request({ type: "flexivault:suggest" }, page);
+assert.equal(response.locked, true);
+assert.deepEqual(response.items, [], "locked vault returns no identifying metadata");
+let ticket = await begin();
+assert.equal(ticket.ok, true);
+assert.equal(typeof ticket.token, "string");
+response = await request({ type: "flexivault:unlock-submit", token: ticket.token, password: master }, page);
+assert.equal(response.ok, false, "content scripts cannot submit an unlock password");
+response = await request({ type: "flexivault:unlock-info", token: ticket.token },
+  unlockSender({ tab: { id: 2, windowId: activeUnlockWindowId + 1 } }));
+assert.equal(response.ok, false, "capability cannot be used by another window");
+response = await request({ type: "flexivault:unlock-info", token: ticket.token }, unlockSender());
+assert.equal(response.host, "acme.test");
+assert.ok(!JSON.stringify(response).includes("ada@example.com"), "unlock info reveals no vault metadata");
+response = await request({ type: "flexivault:unlock-submit", token: ticket.token, password: "wrong" }, unlockSender());
+assert.equal(response.ok, false);
+assert.ok(!sessionArea.__get()[SESSION_KEY].encryptionKeyB64, "incorrect password keeps vault locked");
+response = await request({ type: "flexivault:unlock-submit", token: ticket.token, password: master }, unlockSender({ frameId: 1 }));
+assert.equal(response.ok, false, "capability is restricted to the trusted top-level extension page");
+activeTabUrl = "https://evil.test/login";
+response = await request({ type: "flexivault:unlock-submit", token: ticket.token, password: master }, unlockSender());
+assert.equal(response.ok, false, "navigation invalidates the form unlock");
+activeTabUrl = page.url;
+await request({ type: "flexivault:unlock-close", token: ticket.token }, page);
+response = await request({ type: "flexivault:unlock-submit", token: ticket.token, password: master }, unlockSender());
+assert.equal(response.ok, false, "dismissed capabilities cannot unlock");
+ticket = await begin();
+response = await request({ type: "flexivault:unlock-submit", token: ticket.token, password: master }, unlockSender());
+assert.equal(response.ok, true);
+assert.equal(sessionArea.__get()[SESSION_KEY].token, "retained-token");
+assert.equal(sessionArea.__get()[SESSION_KEY].encryptionKeyB64, bytesToBase64(derived.encryptionKey));
+assert.deepEqual(localArea.__get()[CACHE_KEY], offlineCache, "unlock preserves dirty/offline encrypted saves");
+assert.equal(unlockNotifications.at(-1).options.documentId, "login-document");
+assert.deepEqual(Object.keys(unlockNotifications.at(-1).message).sort(), ["token", "type", "unlocked"],
+  "parent receives completion only, never keys or the master password");
+response = await request({ type: "flexivault:unlock-submit", token: ticket.token, password: master }, unlockSender());
+assert.equal(response.ok, false, "successful capabilities are single-use");
+response = await request({ type: "flexivault:suggest" }, page);
+assert.equal(response.locked, false);
+assert.equal(response.items[0].id, loginItem.id, "form suggestions resume after unlock without opening the popup");
+await sessionArea.set({ [SESSION_KEY]: { token: "retained-token" } });
+ticket = await begin();
+const ticketName = `flexivault.inline-unlock.${ticket.token}`;
+const expired = sessionArea.__get()[ticketName];
+await sessionArea.set({ [ticketName]: { ...expired, createdAt: Date.now() - 121000 } });
+response = await request({ type: "flexivault:unlock-submit", token: ticket.token, password: master }, unlockSender());
+assert.equal(response.ok, false, "expired capabilities cannot unlock");
+ticket = await begin();
+const pendingUnlock = request({ type: "flexivault:unlock-submit", token: ticket.token, password: master }, unlockSender());
+await new Promise(resolve => setTimeout(resolve, 5));
+changeListener({ [SESSION_KEY]: { newValue: { token: "retained-token" } } }, "session");
+response = await pendingUnlock;
+assert.equal(response.ok, false, "explicit lock during KDF cannot be undone by completion");
+assert.ok(!sessionArea.__get()[SESSION_KEY].encryptionKeyB64);
+assert.equal(typeof windowRemovedListener, "function", "unlock-window removal is monitored");
 
 console.log("Background worker checks passed.");

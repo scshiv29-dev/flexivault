@@ -4,6 +4,7 @@ jest.mock("react-native", () => {
     clearAllPendingSaves: jest.fn(),
     clearPendingSaves: jest.fn(),
     readPendingSaves: jest.fn(),
+    lock: jest.fn(),
   };
   reactNative.Platform.OS = "android";
   return reactNative;
@@ -14,6 +15,7 @@ import { NativeModules } from "react-native";
 import {
   clearAllPendingAutofillSaves,
   clearPendingAutofillSaves,
+  lockAutofill,
 } from "../autofill";
 
 const native = NativeModules.FlexiVaultAutofill;
@@ -23,6 +25,7 @@ describe("pending autofill cleanup", () => {
     jest.resetAllMocks();
     native.clearAllPendingSaves.mockResolvedValue(null);
     native.clearPendingSaves.mockResolvedValue(null);
+    native.lock.mockResolvedValue(null);
   });
 
   it("clears all native entries without reading or parsing credentials", async () => {
@@ -53,6 +56,13 @@ describe("pending autofill cleanup", () => {
     await clearPendingAutofillSaves([]);
 
     expect(native.clearPendingSaves).not.toHaveBeenCalled();
+    expect(native.clearAllPendingSaves).not.toHaveBeenCalled();
+  });
+
+  it("hides native suggestions on lock without deleting the encrypted vault or save queue", async () => {
+    await lockAutofill();
+    expect(native.lock).toHaveBeenCalledWith();
+    expect(native.readPendingSaves).not.toHaveBeenCalled();
     expect(native.clearAllPendingSaves).not.toHaveBeenCalled();
   });
 });

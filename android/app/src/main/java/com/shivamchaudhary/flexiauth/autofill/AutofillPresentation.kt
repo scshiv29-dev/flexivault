@@ -6,6 +6,12 @@ import com.shivamchaudhary.flexiauth.R
 
 /** Shared presentation used by the dataset shown in the picker and the authenticated result. */
 object AutofillPresentation {
+  fun unlock(context: Context): RemoteViews =
+    RemoteViews(context.packageName, R.layout.autofill_dataset).apply {
+      setTextViewText(R.id.autofill_title, "Unlock FlexiVault")
+      setTextViewText(R.id.autofill_subtitle, "Use your master password to fill here")
+      setImageViewResource(R.id.autofill_icon, R.mipmap.ic_launcher)
+    }
   fun build(context: Context, login: AutofillLogin): RemoteViews =
     RemoteViews(context.packageName, R.layout.autofill_dataset).apply {
       setTextViewText(R.id.autofill_title, login.name)

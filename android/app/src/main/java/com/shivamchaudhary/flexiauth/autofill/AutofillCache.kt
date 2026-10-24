@@ -49,7 +49,15 @@ object AutofillCache {
       "Autofill cache is too large."
     }
 
-    val logins = parsePayload(json)
+    persist(context, parsePayload(json))
+  }
+
+  @Synchronized
+  internal fun writeLogins(context: Context, logins: List<AutofillLogin>) {
+    persist(context, logins.take(MAX_LOGINS))
+  }
+
+  private fun persist(context: Context, logins: List<AutofillLogin>) {
     if (logins.isEmpty()) {
       clear(context)
       return
@@ -149,7 +157,7 @@ object AutofillCache {
     return root.put("logins", array).toString()
   }
 
-  private fun parsePayload(json: String): List<AutofillLogin> {
+  internal fun parsePayload(json: String): List<AutofillLogin> {
     val root = JSONObject(json)
     if (root.optInt("version", 0) != 1) {
       throw IllegalArgumentException("Unsupported autofill cache version.")

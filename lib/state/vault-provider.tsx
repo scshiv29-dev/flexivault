@@ -17,6 +17,7 @@ import {
   clearPendingAutofillSaves,
   configureAutofill,
   hasNativeAutofill,
+  lockAutofill,
   readPendingAutofillSaves,
 } from "@/lib/native/autofill";
 import {
@@ -347,10 +348,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     itemsRef.current = [];
     setItems([]);
     setStatus("locked");
+    statusRef.current = "locked";
+    void lockAutofill().catch(() => {});
     setSyncStatus("idle");
-    // Keep the encrypted autofill cache. Each fill is still gated by the
-    // device-authentication activity, and clearing here made the system
-    // service go dark whenever auto-lock fired.
+    // Keep ciphertext, but hide suggestions. The form now offers a separate
+    // master-password unlock overlay instead of requiring the main app.
   }, []);
 
   const legacyItems = useCallback(() => legacyItemsFrom(legacyRef.current), []);
@@ -374,6 +376,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
     (async () => {
       try {
+        await lockAutofill().catch(() => {});
         const meta = await getAllMeta();
         const token = await getSessionToken();
 
@@ -491,6 +494,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     // Bulk changes (import, group rename) arrive in one React update. Debounce
     // the native encryption so we write one cache instead of one per item.
     const timer = setTimeout(() => {
+      if (!keyRef.current || statusRef.current !== "unlocked") return;
       configureAutofill(items).catch(() => {
         // Do not break unlock or editing if the native cache cannot be written.
       });

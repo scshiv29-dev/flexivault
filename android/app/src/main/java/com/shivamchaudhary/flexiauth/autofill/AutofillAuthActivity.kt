@@ -4,10 +4,22 @@ import android.app.KeyguardManager
 import android.app.assist.AssistStructure
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.service.autofill.Dataset
 import android.view.WindowManager
+import android.view.Gravity
+import android.view.ViewGroup
+import android.text.InputType
+import android.widget.Button
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 import android.view.autofill.AutofillId
 import android.view.autofill.AutofillManager
 import android.view.autofill.AutofillValue
@@ -15,6 +27,7 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import com.shivamchaudhary.flexiauth.R
 
 /**
  * Transparent, non-exported activity used as the authentication step of an
@@ -33,6 +46,8 @@ class AutofillAuthActivity : FragmentActivity() {
     const val EXTRA_USERNAME_ID = "username_id"
     const val EXTRA_PASSWORD_ID = "password_id"
     const val EXTRA_WEB_DOMAIN = "web_domain"
+    const val EXTRA_TARGET_PACKAGE = "target_package"
+    const val EXTRA_UNLOCK = "unlock_vault"
 
     fun canAuthenticate(context: Context): Boolean {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -50,15 +65,26 @@ class AutofillAuthActivity : FragmentActivity() {
     }
   }
 
-  private var finished = false
+  @Volatile private var finished = false
   private var promptSubtitle = "Confirm to fill this login"
   private var loginId: String? = null
   private var expectedWebDomain: String? = null
+  private var expectedPackage: String? = null
+  private var needsUnlock = false
+  private var vaultKey: ByteArray? = null
+  private var epoch = 0L
+  private var busy = false
+  private var deviceAuthenticated = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
     setFinishOnTouchOutside(false)
+    window.decorView.filterTouchesWhenObscured = true
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) window.setHideOverlayWindows(true)
+    epoch = AutofillSession.epoch()
+    needsUnlock = intent?.getBooleanExtra(EXTRA_UNLOCK, false) == true
+    expectedPackage = intent?.getStringExtra(EXTRA_TARGET_PACKAGE)
 
     loginId = intent?.getStringExtra(EXTRA_LOGIN_ID)
     expectedWebDomain = intent?.getStringExtra(EXTRA_WEB_DOMAIN)
@@ -76,6 +102,16 @@ class AutofillAuthActivity : FragmentActivity() {
       cancel()
       return
     }
+
+    if (needsUnlock) {
+      showMasterPassword()
+      return
+    }
+
+    authenticateDevice()
+  }
+
+  private fun authenticateDevice() {
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       if (canUseBiometrics()) {
@@ -169,19 +205,43 @@ class AutofillAuthActivity : FragmentActivity() {
 
   private fun succeed() {
     if (finished) return
+    deviceAuthenticated = true
+    if (needsUnlock && loginId == null) {
+      showLoginPicker()
+      return
+    }
 
     // A lock, reset, expiry or settings change may have cleared the cache while
     // the prompt was open. Do not complete a stale dataset in that case.
     val id = loginId
     val login = try {
       id?.let {
-        AutofillPendingStore.apply(this, AutofillCache.read(this))
+        val logins = if (needsUnlock) {
+          if (epoch != AutofillSession.epoch()) return@let null
+          vaultKey?.let { key -> matchingLogins(key) } ?: emptyList()
+        } else {
+          if (!AutofillSession.isUnlocked()) return@let null
+          AutofillPendingStore.apply(this, AutofillCache.read(this))
+        }
+        logins
           .firstOrNull { login -> login.id == it }
       }
     } catch (_: Exception) {
       null
     }
     if (login == null) {
+      cancel()
+      return
+    }
+
+    val currentFields = assistFields()
+    if (
+      currentFields != null &&
+      (
+        (!expectedPackage.isNullOrBlank() && currentFields.packageName != expectedPackage) ||
+          (!expectedWebDomain.isNullOrBlank() && currentFields.webDomain != expectedWebDomain)
+        )
+    ) {
       cancel()
       return
     }
@@ -207,15 +267,200 @@ class AutofillAuthActivity : FragmentActivity() {
       return
     }
 
+    runOnUiThread {
+      if (finished) return@runOnUiThread
+      if (needsUnlock && epoch != AutofillSession.epoch()) return@runOnUiThread cancel()
+      if (!needsUnlock && !AutofillSession.isUnlocked()) return@runOnUiThread cancel()
+      finished = true
+      // Dataset-level authentication needs a populated result, not just OK.
+      setResult(RESULT_OK,
+        Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset))
+      finish()
+    }
+  }
+
+  private fun matchingLogins(key: ByteArray): List<AutofillLogin> {
+    check(deviceAuthenticated && epoch == AutofillSession.epoch()) { "Unlock was cancelled." }
+    val fields = assistFields()
+    val targetPackage = expectedPackage ?: fields?.packageName
+    check(!targetPackage.isNullOrBlank() && targetPackage != packageName) { "The form changed." }
+    if (fields != null) {
+      check(fields.packageName == targetPackage) { "The app changed. Start unlock again." }
+      if (AutofillMatcher.isBrowserPackage(targetPackage)) {
+        check(!fields.webDomain.isNullOrBlank() && fields.webDomain == expectedWebDomain) {
+          "The website changed. Start unlock again."
+        }
+      }
+    }
+    val browser = AutofillMatcher.isBrowserPackage(targetPackage)
+    check(!browser || !expectedWebDomain.isNullOrBlank()) { "The website could not be verified." }
+    val appLabel = if (browser) null else try {
+      packageManager.getApplicationLabel(packageManager.getApplicationInfo(targetPackage, 0)).toString()
+    } catch (_: Exception) { null }
+    val tokens = AutofillMatcher.targetTokens(targetPackage, appLabel)
+    return AutofillPendingStore.apply(this, AutofillVaultReader.readLogins(this, key))
+      .map { it to AutofillMatcher.score(it, expectedWebDomain, targetPackage, tokens) }
+      .filter { it.second > 0 }.sortedByDescending { it.second }.take(8).map { it.first }
+  }
+
+  private fun showMasterPassword() {
+    window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+    window.setDimAmount(0.45f)
+    val card = overlay("Unlock FlexiVault", "Fill this form without opening your vault.")
+    val label = TextView(this).apply {
+      text = "Master password"
+      textSize = 12f
+      setTextColor(color(R.color.autofill_muted))
+      setPadding(0, dp(12), 0, dp(6))
+    }
+    card.addView(label)
+    val input = EditText(this).apply {
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+      setSingleLine(true)
+      hint = "Enter your master password"
+      textSize = 15f
+      setTextColor(color(R.color.autofill_text))
+      setHintTextColor(color(R.color.autofill_muted))
+      setPadding(dp(12), dp(10), dp(12), dp(10))
+      background = GradientDrawable().apply {
+        setColor(color(R.color.autofill_field)); cornerRadius = dp(10).toFloat()
+      }
+      importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+      filterTouchesWhenObscured = true
+      isSaveEnabled = false
+      imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE or
+        android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+    }
+    card.addView(input)
+    val status = TextView(this).apply {
+      setTextColor(color(R.color.autofill_muted)); textSize = 12f
+      text = "Next, confirm with your fingerprint or device lock."
+      setPadding(0, dp(12), 0, dp(12))
+    }
+    card.addView(status)
+    val submit = action("Unlock", true) {}
+    val submitPassword = {
+      if (!busy && !finished) {
+        val password = input.text.toString()
+        if (password.isEmpty() || password.length > 4096) {
+          input.error = "Enter your master password"
+        } else {
+          busy = true
+          input.setText("")
+          input.isEnabled = false
+          submit.isEnabled = false
+          submit.text = "Unlocking…"
+          Thread {
+            val key = try { AutofillVaultReader.unlock(this, password) } catch (_: Exception) { null }
+            runOnUiThread {
+              if (finished || isDestroyed || epoch != AutofillSession.epoch()) {
+                key?.fill(0)
+                cancel()
+              } else if (key == null) {
+                busy = false
+                input.isEnabled = true
+                submit.isEnabled = true
+                submit.text = "Unlock"
+                status.text = "Could not unlock. Check your master password and try again."
+                input.requestFocus()
+              } else {
+                vaultKey = key
+                // Remove the password surface before the system-auth prompt.
+                setContentView(FrameLayout(this))
+                authenticateDevice()
+              }
+            }
+          }.start()
+        }
+      }
+    }
+    submit.setOnClickListener { submitPassword() }
+    input.setOnEditorActionListener { _, _, _ -> submitPassword(); true }
+    card.addView(submit)
+    card.addView(action("Not now", false) { cancel() })
+  }
+
+  private fun showLoginPicker() {
+    val key = vaultKey ?: return cancel()
+    Thread {
+      val matches = try {
+        // Hydrate the Keystore-encrypted login-only cache only after both the
+        // master password and device authentication succeeded. This also lets
+        // multi-step sign-in continue on the next form without opening the app.
+        val all = AutofillVaultReader.readLogins(this, key)
+        AutofillSession.configure(epoch, AutofillVaultReader.autoLockMinutes(this)) {
+          AutofillCache.writeLogins(this, all)
+        }
+        matchingLogins(key)
+      } catch (_: Exception) { emptyList() }
+      runOnUiThread {
+        if (finished || isDestroyed || epoch != AutofillSession.epoch()) return@runOnUiThread cancel()
+        val card = overlay("Choose a login", expectedWebDomain ?: "Fill this app with FlexiVault")
+        busy = false
+        if (matches.isEmpty()) {
+          card.addView(TextView(this).apply {
+            text = "No saved logins match this form."
+            setTextColor(color(R.color.autofill_muted)); setPadding(0, dp(16), 0, dp(16))
+          })
+        }
+        for (login in matches) {
+          card.addView(action(listOfNotNull(login.name, login.username).joinToString(" · "), false) {
+            if (!busy) {
+              busy = true
+              loginId = login.id
+              // Re-read after selection: deletion, reset or changed hosts must
+              // never complete an old credential from the picker.
+              Thread { succeed() }.start()
+            }
+          })
+        }
+        card.addView(action("Not now", false) { cancel() })
+      }
+    }.start()
+  }
+
+  private fun overlay(title: String, subtitle: String): LinearLayout {
+    val root = FrameLayout(this).apply { setPadding(dp(22), dp(22), dp(22), dp(22)) }
+    val scroll = ScrollView(this)
+    val card = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(dp(22), dp(20), dp(22), dp(16))
+      background = GradientDrawable().apply {
+        setColor(color(R.color.autofill_card)); cornerRadius = dp(22).toFloat()
+        setStroke(dp(1), color(R.color.autofill_field))
+      }
+    }
+    scroll.addView(card)
+    root.addView(scroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+      ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+    card.addView(TextView(this).apply {
+      text = title; textSize = 20f; setTypeface(typeface, android.graphics.Typeface.BOLD)
+      setTextColor(color(R.color.autofill_text))
+    })
+    card.addView(TextView(this).apply {
+      text = subtitle; textSize = 13f; setTextColor(color(R.color.autofill_muted))
+      setPadding(0, dp(6), 0, dp(10))
+    })
+    setContentView(root)
+    return card
+  }
+
+  private fun action(label: String, primary: Boolean, click: () -> Unit): Button = Button(this).apply {
+    text = label; isAllCaps = false; minHeight = dp(48)
+    setTextColor(color(if (primary) R.color.activityBackground else R.color.autofill_text))
+    backgroundTintList = ColorStateList.valueOf(color(if (primary) R.color.autofill_accent else R.color.autofill_field))
+    filterTouchesWhenObscured = true
+    setOnClickListener { click() }
+  }
+
+  private fun color(id: Int): Int = ContextCompat.getColor(this, id)
+  private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+  override fun onDestroy() {
     finished = true
-    // Dataset-level authentication requires the fully populated dataset in the
-    // result; RESULT_OK on its own makes Android dismiss the prompt without
-    // filling anything.
-    setResult(
-      RESULT_OK,
-      Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset),
-    )
-    finish()
+    vaultKey?.fill(0)
+    vaultKey = null
+    super.onDestroy()
   }
 
   private fun buildAuthenticatedDataset(login: AutofillLogin): Dataset? {
@@ -280,9 +525,11 @@ class AutofillAuthActivity : FragmentActivity() {
   }
 
   private fun cancel() {
-    if (finished) return
-    finished = true
-    setResult(RESULT_CANCELED)
-    finish()
+    runOnUiThread {
+      if (finished) return@runOnUiThread
+      finished = true
+      setResult(RESULT_CANCELED)
+      finish()
+    }
   }
 }

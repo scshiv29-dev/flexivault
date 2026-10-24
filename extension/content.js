@@ -577,7 +577,7 @@ function renderPanel(kind, items) {
   const mark = document.createElement("span");
   mark.className = "mark";
   const title = document.createElement("span");
-  title.textContent = kind === "otp" ? "Authenticator code" : "Saved logins";
+  title.textContent = kind === "locked" ? "Vault locked" : kind === "otp" ? "Authenticator code" : "Saved logins";
   head.append(mark, title);
 
   const list = document.createElement("div");
@@ -609,7 +609,7 @@ function renderPanel(kind, items) {
       kind === "otp"
         ? [item.issuer, item.label || item.username].filter(Boolean).join(" · ") ||
           "One-time code"
-        : item.username || "Saved login";
+        : item.unlock ? "Continue here with your master password" : item.username || "Saved login";
     text.append(name, sub);
     row.append(tile, text);
 
@@ -625,6 +625,7 @@ function renderPanel(kind, items) {
       updateActive();
     });
     row.addEventListener("click", (event) => {
+      if (item.unlock && !event.isTrusted) return;
       event.preventDefault();
       event.stopPropagation();
       void choose(item);
@@ -948,7 +949,7 @@ function scheduleRequest(field, kind) {
 
 async function requestSuggestions(field, kind) {
   if (!isActiveInstance()) return;
-  if (filling) return;
+  if (filling || inlineUnlock) return;
   if (!field?.isConnected || activeElementDeep() !== field) return;
   if (fieldKind(field) !== kind) return;
   if (activeField === field && panel && !panel.hidden) return;
@@ -977,7 +978,11 @@ async function requestSuggestions(field, kind) {
   if (token !== requestToken || activeField !== field || !field.isConnected) {
     return;
   }
-  if (!response?.ok || response.locked || !response.items?.length) {
+  if (response?.ok && response.configured && response.locked) {
+    showPanel(field, "locked", [{ id: "unlock", name: "Unlock FlexiVault", unlock: true }]);
+    return;
+  }
+  if (!response?.ok || !response.items?.length) {
     if (token === requestToken) closePanel();
     return;
   }
@@ -990,6 +995,10 @@ async function choose(item) {
   const field = activeField;
   const kind = activeKind;
   if (!field || !field.isConnected || !item) return;
+  if (item.unlock) {
+    await openInlineUnlock(field, kind);
+    return;
+  }
 
   filling = true;
   closePanel();
@@ -1020,6 +1029,37 @@ async function choose(item) {
     filling = false;
     clearTimeout(focusTimer);
   }
+}
+
+let inlineUnlock = null;
+
+function closeInlineUnlock(abort = true) {
+  const current = inlineUnlock;
+  inlineUnlock = null;
+  if (abort && current?.token) {
+    void chrome.runtime.sendMessage({ type: "flexivault:unlock-close", token: current.token }).catch(() => {});
+  }
+  return current;
+}
+
+async function openInlineUnlock(field, kind) {
+  closePanel();
+  closeInlineUnlock();
+  const originalUrl = location.href;
+  let result;
+  try {
+    result = await chrome.runtime.sendMessage({ type: "flexivault:unlock-open" });
+  } catch {
+    result = { ok: false, error: "FlexiVault is unavailable. Reload this page and try again." };
+  }
+  if (!isActiveInstance() || !field.isConnected || location.href !== originalUrl) return;
+  if (!result?.ok) {
+    activeField = field;
+    activeKind = kind;
+    showPanel(field, "locked", [{ id: "unlock", name: result?.error || "Try Unlock FlexiVault again", unlock: true }]);
+    return;
+  }
+  inlineUnlock = { token: result.token, field, kind, url: originalUrl };
 }
 
 function eligibleField(event) {
@@ -1087,6 +1127,11 @@ document.addEventListener(
   (event) => {
     if (!isActiveInstance()) return;
     if (!event.isTrusted) return;
+    if (inlineUnlock && event.key === "Escape") {
+      event.preventDefault();
+      closeInlineUnlock();
+      return;
+    }
     if (!panel || panel.hidden || !activeField) return;
     if (activeElementDeep() !== activeField) return;
 
@@ -1159,6 +1204,16 @@ document.addEventListener(
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!isActiveInstance()) return undefined;
+  if (message?.type === "flexivault:unlock-complete") {
+    if (_sender.id !== chrome.runtime.id || message.token !== inlineUnlock?.token) return undefined;
+    const current = closeInlineUnlock(false);
+    if (message.unlocked && current.field.isConnected && location.href === current.url) {
+      current.field.focus();
+      void requestSuggestions(current.field, current.kind);
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
   if (message?.type !== "flexivault:fill") return undefined;
 
   try {

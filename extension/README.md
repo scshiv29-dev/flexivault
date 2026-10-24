@@ -29,6 +29,9 @@ the internet.
 
 - Connect to any FlexiVault server and cache the encrypted vault locally.
 - Unlock with the master password; verify it offline with a key check.
+- Unlock directly from a locked login form. The inline action opens a small
+  browser-owned FlexiVault window and returns to the same form automatically;
+  users do not need to open the toolbar popup or full vault page.
 - Search and filter logins, cards, secure notes, identities and 2FA items in the
   popup or a responsive full-page vault tab.
 - Suggest saved logins inline when a matching login field gets focus. The
@@ -72,6 +75,17 @@ npm run icons   # regenerate the PNG icons
 and jsdom. jsdom is available from the repository root's dev dependencies
 (`npm install` at the root); the extension itself has no runtime dependencies.
 
+The optional real-Chromium form-unlock test also checks a page with
+`frame-src 'none'`, wrong-password clearing, cross-window capability binding,
+navigation/timeout/lock races, and the successful return-to-form fill:
+
+```bash
+# From the repository root:
+npm install --no-save playwright
+npx playwright install chromium
+node extension/scripts/inline-unlock-browser-test.mjs
+```
+
 ## Package and publish
 
 A release tag attaches `FlexiVault-Extension-<version>.zip` and its SHA-256
@@ -93,6 +107,8 @@ reviewer demo account. Firefox is not supported yet.
 | `vault.html` | Dedicated full-page vault shell (reuses `popup.js`/`popup.css`) |
 | `popup.js` | View state, connect/unlock/lock/sync, copy, TOTP, autofill, full page |
 | `background.js` | Host-matched suggestions, on-demand decryption and TOTP fills |
+| `unlock.html` / `unlock.css` / `unlock.js` | Secure browser-owned form unlock window |
+| `src/inline-unlock.js` | Offline key check and cached-envelope validation |
 | `src/crypto.js` | PBKDF2-SHA256, AES-256-GCM envelopes, key check |
 | `src/api.js` | Server client and URL normalisation |
 | `src/otp.js` | RFC 6238 TOTP in WebCrypto |
@@ -108,6 +124,13 @@ reviewer demo account. Firefox is not supported yet.
   (210,000 rounds, salt and iteration count from the server) produces 64 bytes:
   the first 32 are the AES-256-GCM vault key, the second 32 are hashed into the
   `authHash` sent to the server.
+- While locked, a website receives only `configured: true, locked: true`; no item
+  IDs, names or usernames. Choosing **Unlock FlexiVault** creates a two-minute,
+  single-use capability bound to the originating tab, document, URL, vault
+  configuration and browser-owned unlock window. Password submission is
+  accepted only from that top-level `chrome-extension://` page. The website
+  cannot read the password control or its keystrokes. Navigation, cancellation,
+  explicit lock, configuration changes and timeout invalidate the capability.
 - Vault items are decrypted in the popup/full-page UI and in the background
   worker while the session is unlocked. The local cache in
   `chrome.storage.local` contains ciphertext envelopes, never plaintext.
@@ -160,7 +183,8 @@ offers a save/update prompt.
 - Sync normally pulls. After a save/update it writes the encrypted row locally
   and pushes with the same revision conflict merge; it is not a general
   full-vault editor.
-- Inline suggestions need an unlocked vault. The content script recognises
+- Inline suggestions require an unlocked session, but a locked form can start a
+  local unlock without opening the toolbar popup. The content script recognises
   login, username and common one-time-code fields, including fields inside open
   shadow roots and email-only first-step sign-in pages. It cannot see closed
   shadow roots, fields inside iframes, split one-character OTP boxes, or

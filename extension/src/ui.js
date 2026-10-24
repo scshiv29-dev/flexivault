@@ -610,7 +610,7 @@ function settingsBody(state) {
     </div>
 
     <p class="tiny center" style="margin-top:18px">
-      FlexiVault extension · v${globalThis.chrome?.runtime?.getManifest?.().version ?? "1.0.3"} · keys stay with you
+      FlexiVault extension · v${globalThis.chrome?.runtime?.getManifest?.().version ?? "1.0.4"} · keys stay with you
     </p>
   </main>`;
 }

@@ -22,13 +22,13 @@ New-Item -ItemType Directory -Force dist | Out-Null
 Push-Location extension
 Compress-Archive `
   -Path manifest.json, background.js, content.js, popup.html, popup.css, `
-        popup.js, vault.html, src, fonts, icons `
-  -DestinationPath ..\dist\FlexiVault-Extension-1.0.1.zip `
+        popup.js, vault.html, unlock.html, unlock.css, unlock.js, src, fonts, icons `
+  -DestinationPath ..\dist\FlexiVault-Extension-1.0.4.zip `
   -Force
 Pop-Location
 
-tar -tf dist\FlexiVault-Extension-1.0.1.zip | Select-Object -First 12
-Get-FileHash dist\FlexiVault-Extension-1.0.1.zip -Algorithm SHA256
+tar -tf dist\FlexiVault-Extension-1.0.4.zip | Select-Object -First 12
+Get-FileHash dist\FlexiVault-Extension-1.0.4.zip -Algorithm SHA256
 ```
 
 The zip must contain `manifest.json` at its **root**, not inside an
@@ -40,9 +40,9 @@ On Linux/macOS, use the same file list with `zip`:
 
 ```bash
 cd extension
-zip -r ../dist/FlexiVault-Extension-1.0.1.zip \
+zip -r ../dist/FlexiVault-Extension-1.0.4.zip \
   manifest.json background.js content.js popup.html popup.css popup.js \
-  vault.html src fonts icons
+  vault.html unlock.html unlock.css unlock.js src fonts icons
 ```
 
 Before uploading, bump the version in **both** `extension/manifest.json` and

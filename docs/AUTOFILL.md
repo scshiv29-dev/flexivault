@@ -28,6 +28,13 @@ Expo Go cannot exercise this feature. It needs a native APK built from
   Android fills the username and password. The prompt is a translucent activity
   over the app being filled; FlexiVault's own task is not brought forward, and no
   "draw over other apps" permission is required. Cancelling fills nothing.
+- While the app is locked, Android reveals no login labels or usernames. It
+  offers one **Unlock FlexiVault** dataset instead. Selecting it opens a secure
+  translucent surface in the target app's task: enter the master password,
+  confirm with biometrics/device lock, then choose a matching login. The main
+  FlexiVault activity never comes forward. The password and derived key are not
+  persisted; a login-only Keystore-encrypted cache is rebuilt after successful
+  authentication so multi-step sign-in can continue.
 - The cache is login-only. It contains no notes, cards, identities, TOTP seeds,
   settings or vault keys.
 - The cache survives app locks and device reboots. It is cleared when autofill is
@@ -103,6 +110,13 @@ AutofillAuthActivity ── BiometricPrompt / Keyguard
 Android fills the target fields
 ```
 
+When locked, `AutofillAuthActivity` first reads the existing encrypted SQLite
+vault read-only, derives the key locally with the same PBKDF2 parameters,
+validates `keyCheck`, requires device authentication, rechecks the target
+package/domain and returns only the selected matching dataset. Overlay windows
+are hidden on Android 12+, obscured touches are rejected, screenshots are
+blocked, and reset/lock races invalidate the in-flight unlock.
+
 Save/update adds a second, optional path:
 
 ```text
@@ -154,11 +168,13 @@ The cache also stores the wall-clock time at write time. On read:
 - if decryption or JSON validation fails, the cache is deleted;
 - an empty login list deletes the cache.
 
-The cache is **not** cleared by `lock()`, app restart, backgrounding, or a device
-reboot. Each fill is still gated by the authentication activity, so the cache
-cannot be used without a biometric or device-credential prompt. `resetVault()`
-and disabling autofill call `clearAutofillCache()`. The service never writes to
-the vault.
+The cache ciphertext is **not** cleared by `lock()`, app restart, backgrounding,
+or a device reboot. A separate process-local session gate hides every cached
+identity while locked; a process restart starts locked. A successful app unlock
+or form unlock re-enables matching, and each selected login is still gated by a
+biometric or device-credential prompt. `resetVault()` and disabling autofill call
+`clearAutofillCache()`. The service only reads the encrypted vault during an
+explicit form unlock and never writes to it.
 
 ### Why each fill is authenticated
 
@@ -376,6 +392,7 @@ must be refreshed when a browser's signing certificate or package entry changes.
 isAutofillAvailable(): Promise<boolean>;
 isAutofillEnabledOnDevice(): Promise<boolean>;
 configureAutofill(items: VaultItem[]): Promise<void>;
+lockAutofill(): Promise<void>;
 clearAutofillCache(): Promise<void>;
 openAutofillSettings(): Promise<void>;
 ```
@@ -443,10 +460,12 @@ On a physical Android 8+ device (or an emulator with a secure lock screen):
 6. In the native test app, focus its username/password form. Logins with its
    package, or with an app label/login name that matches, should be offered.
 7. Cancel the authentication prompt; nothing is filled.
-8. Lock FlexiVault, then focus the form again; the suggestion should still appear
-   and should require the device prompt before filling.
-9. Reboot without opening FlexiVault, then focus the form again; the suggestion
-   should still appear after the device prompt.
+8. Lock FlexiVault, then focus the form again. No account labels should appear;
+   choose **Unlock FlexiVault**, enter the master password, complete the device
+   prompt and choose a matching account. The target app must remain foreground.
+   Cancel or enter a wrong password once and confirm nothing fills.
+9. Reboot without opening FlexiVault and repeat the form unlock. Confirm a
+   look-alike browser domain receives neither the unlock result nor credentials.
 10. Disable System autofill; the service no longer offers credentials.
 11. On an email-first page such as Google's sign-in, focus only the email field.
     A username-only suggestion should fill the email. Continue to the password
