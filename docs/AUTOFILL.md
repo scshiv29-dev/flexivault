@@ -30,11 +30,22 @@ Expo Go cannot exercise this feature. It needs a native APK built from
   "draw over other apps" permission is required. Cancelling fills nothing.
 - While the app is locked, Android reveals no login labels or usernames. It
   offers one **Unlock FlexiVault** dataset instead. Selecting it opens a secure
-  translucent surface in the target app's task: enter the master password,
-  confirm with biometrics/device lock, then choose a matching login. The main
-  FlexiVault activity never comes forward. The password and derived key are not
-  persisted; a login-only Keystore-encrypted cache is rebuilt after successful
+  translucent surface in the target app's task. If biometric unlock is on in
+  the app, the system fingerprint/face prompt appears first (device PIN or
+  pattern also works on Android 11+); otherwise, or after **Use master
+  password**, enter the master password and confirm with biometrics/device
+  lock. Then choose a matching login. The main FlexiVault activity never comes
+  forward. The password and derived key are not persisted in plaintext; a
+  login-only Keystore-encrypted cache is rebuilt after successful
   authentication so multi-step sign-in can continue.
+- Biometric form unlock (1.0.4): turning on biometric unlock in the app also
+  encrypts the vault key to a Keystore RSA-2048 key whose private half needs a
+  fresh strong biometric (or device credential on Android 11+) for every use.
+  The overlay unwraps it only inside a `BiometricPrompt` `CryptoObject` and
+  checks it against the vault key check. Enrolling a new fingerprint or face,
+  turning biometrics off, or resetting the vault removes it; the master password
+  always remains available. Weak (Class 2) face unlock cannot release Keystore
+  keys, so on those phones the prompt offers fingerprint or the device PIN.
 - The cache is login-only. It contains no notes, cards, identities, TOTP seeds,
   settings or vault keys.
 - The cache survives app locks and device reboots. It is cleared when autofill is

@@ -103,6 +103,10 @@ SQLite tables:
 - `users` — email, scrypt-hashed `authHash`, KDF salt/iterations, revision,
   optional encrypted TOTP secret
 - `vault_items` — `(user_id, item_id)` plus an opaque `data` envelope
+- `unlock_shares` — extension TOTP quick unlock: a random share (encrypted with
+  the server key), SHA-256 of a device secret, last accepted TOTP step, failure
+  count and a 30-day expiry. The share alone cannot decrypt anything; the
+  wrapped vault key it unlocks stays in the browser.
 
 The server never stores item names, usernames, passwords, notes, or TOTP
 secrets in plaintext. `authHash` is derived client-side from the master
@@ -124,6 +128,9 @@ All routes are JSON under `/api` unless noted. Errors are
 | `POST` | `/api/2fa/setup` | Bearer | Create a pending TOTP secret and `otpauth://` URL |
 | `POST` | `/api/2fa/enable` | Bearer | `{ code }` → `{ totpEnabled: true }` |
 | `POST` | `/api/2fa/disable` | Bearer | `{ code }` → `{ totpEnabled: false }` |
+| `POST` | `/api/quick-unlock` | Bearer | `{ replaceId? }` → `{ id, share, deviceSecret, expiresAt }`; needs 2FA on |
+| `POST` | `/api/quick-unlock/release` | — | `{ id, deviceSecret, code }` → `{ share, token, ...profile }` |
+| `POST` | `/api/quick-unlock/revoke` | — | `{ id, deviceSecret }` → `{ revoked: true }` |
 | `GET` | `/api/sync` | Bearer | `{ revision, items: [{ id, data, updatedAt }] }` |
 | `PUT` | `/api/sync` | Bearer | `{ baseRevision, items, force? }` → new revision |
 
@@ -138,8 +145,10 @@ is rejected with `invalid_item`, so the server cannot be used as plaintext
 storage by mistake.
 
 Rate limits are in-memory and per process: registration `10/hour/IP`,
-prelogin `60/15min/IP`, login `30/15min/IP` plus `15/15min/email`, and sync
-`240/15min/user`. They reset on restart and are not shared between replicas.
+prelogin `60/15min/IP`, login `30/15min/IP` plus `15/15min/email`, sync
+`240/15min/user`, quick-unlock release `30/15min/IP` plus `10/15min/share`.
+A release code must be newer than the last accepted one (no replay), and five
+wrong codes in a row delete the share. They reset on restart and are not shared between replicas.
 
 ## Backup and restore
 

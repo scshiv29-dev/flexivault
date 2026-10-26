@@ -58,15 +58,21 @@ export function totp(secret, { digits = 6, period = 30, timestamp = Date.now() }
   return hotp(secret, Math.floor(timestamp / 1000 / period), digits);
 }
 
-export function verifyTotp(secret, code, { digits = 6, period = 30, window = 1 } = {}) {
-  if (!/^\d+$/.test(String(code))) return false;
+/** Returns the matched time-step counter, or -1. Callers that must reject
+ * replays persist the counter and require a strictly newer one next time. */
+export function matchTotpStep(secret, code, { digits = 6, period = 30, window = 1 } = {}) {
+  if (!/^\d+$/.test(String(code))) return -1;
   const counter = Math.floor(Date.now() / 1000 / period);
   for (let offset = -window; offset <= window; offset += 1) {
     if (safeEqualString(hotp(secret, counter + offset, digits), String(code))) {
-      return true;
+      return counter + offset;
     }
   }
-  return false;
+  return -1;
+}
+
+export function verifyTotp(secret, code, options = {}) {
+  return matchTotpStep(secret, code, options) >= 0;
 }
 
 export function otpauthUrl({ secret, email, issuer = "FlexiVault", digits = 6, period = 30 }) {

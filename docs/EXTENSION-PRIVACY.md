@@ -28,6 +28,13 @@ covered by the same project and the same principles.
   the website. Popup/full-page sign-in sends a derived authentication verifier
   to your server; form unlock validates the local key check and encrypted cache
   without sending an authentication request.
+- **Quick unlock (optional).** If you turn on code unlock, the extension stores
+  your vault key encrypted under a random share held by your own server, plus a
+  device secret, in `chrome.storage.local`. Unlocking sends the device secret and
+  your 6-digit 2FA code to your server, which returns the share. If you set up a
+  passkey, the vault key is encrypted with a secret only your passkey can
+  produce; the passkey credential ID and salt are stored locally and nothing is
+  sent to any server.
 - **Web page data.** The content script reads the active hostname and the login
   or one-time-code field types needed to match a saved item and fill a form.
   Passwords and TOTP codes are returned to the page only after you explicitly
@@ -64,6 +71,9 @@ covered by the same project and the same principles.
   uninstall it.
 - The derived key lives in `chrome.storage.session` and is cleared when the
   browser exits or the vault locks.
+- Quick-unlock records (the wrapped vault key, device secret or passkey ID) stay
+  in `chrome.storage.local` until you turn them off in Settings, disconnect, or
+  uninstall. Turning off code unlock also revokes the share on your server.
 - Pending save/update prompts are encrypted with the vault key in
   `chrome.storage.session`. They are removed when you save or dismiss them, and
   are treated as expired and removed on the next access after five minutes. They

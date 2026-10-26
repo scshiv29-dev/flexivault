@@ -22,6 +22,17 @@ import {
   session,
   touchSession,
 } from "./src/store.js";
+import {
+  QUICK_KEY,
+  enrollTotp,
+  isQuickUnlockGone,
+  quickErrorMessage,
+  readQuickUnlock,
+  revokeTotp,
+  totpNeedsRefresh,
+  unlockWithTotp,
+  writeQuickUnlock,
+} from "./src/quick-unlock.js";
 import { pushDirtyCache } from "./src/sync.js";
 import { appHtml, vaultListHtml } from "./src/ui.js";
 
@@ -41,7 +52,10 @@ const state = {
   session: null,
   selectedId: null,
   filter: "all",
-  form: { serverUrl: "", email: "", password: "", totp: "", query: "" },
+  form: { serverUrl: "", email: "", password: "", totp: "", code: "", query: "" },
+  quick: null,
+  quickBusy: false,
+  focusField: null,
   reveal: {},
   busy: false,
   syncing: false,
@@ -82,7 +96,8 @@ function render() {
       input.setSelectionRange(position, position);
     }
   } else if ((state.view === "locked" || state.view === "setup") && !state.busy) {
-    const input = document.getElementById("password");
+    const preferCode = state.view === "locked" && state.quick?.totp && state.focusField !== "password";
+    const input = document.getElementById(preferCode ? "quick-code" : "password");
     if (input) {
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
@@ -172,6 +187,7 @@ async function boot() {
 
     state.form.email = state.config.email ?? "";
     state.form.serverUrl = state.config.serverUrl ?? "";
+    state.quick = await readQuickUnlock(state.config);
 
     const storedSession = await session.get();
     if (
@@ -351,6 +367,7 @@ async function doUnlock() {
     render();
     return;
   }
+  state.focusField = "password";
   if (!state.form.password) {
     state.error = "Enter your master password.";
     render();
@@ -450,37 +467,149 @@ async function doUnlock() {
       items = loaded.items;
     }
 
-    const nextSession = {
-      encryptionKeyB64: bytesToBase64(derived.encryptionKey),
-      token,
-      unlockedAt: Date.now(),
-      lastActiveAt: Date.now(),
-    };
-    await session.set(nextSession);
-
-    if (!config.keyCheck) {
-      config.keyCheck = await keyCheck(derived.encryptionKey);
-      await local.set({ [CONFIG_KEY]: config });
-    }
-
-    state.session = nextSession;
-    state.items = sortItems(items);
-    state.view = "vault";
-    state.error = null;
-    state.needsTotp = false;
-    state.busy = false;
-    state.form.password = "";
-    state.form.totp = "";
-    render();
-    toast(
-      state.cache.dirty ? "Unlocked. Sync pending." : "Vault unlocked",
-      state.cache.dirty ? "danger" : "success"
-    );
+    await enterVault(derived.encryptionKey, token, items);
+    void refreshCodeUnlock(derived.encryptionKey, token);
   } catch (error) {
     state.busy = false;
     state.error = friendly(error);
     render();
   }
+}
+
+async function enterVault(encryptionKey, token, items) {
+  const config = state.config;
+  const nextSession = {
+    encryptionKeyB64: bytesToBase64(encryptionKey),
+    token,
+    unlockedAt: Date.now(),
+    lastActiveAt: Date.now(),
+  };
+  await session.set(nextSession);
+
+  if (!config.keyCheck) {
+    config.keyCheck = await keyCheck(encryptionKey);
+    await local.set({ [CONFIG_KEY]: config });
+  }
+
+  state.session = nextSession;
+  state.items = sortItems(items);
+  state.view = "vault";
+  state.error = null;
+  state.needsTotp = false;
+  state.busy = false;
+  state.focusField = null;
+  state.form.password = "";
+  state.form.totp = "";
+  state.form.code = "";
+  render();
+  toast(
+    state.cache.dirty ? "Unlocked. Sync pending." : "Vault unlocked",
+    state.cache.dirty ? "danger" : "success"
+  );
+}
+
+/** A master-password unlock silently renews code unlock before it expires. */
+async function refreshCodeUnlock(encryptionKey, token) {
+  const quick = await readQuickUnlock(state.config);
+  if (!token || !quick?.totp || !totpNeedsRefresh(quick.totp)) return;
+  try {
+    const totp = await enrollTotp(state.config, token, encryptionKey, quick.totp);
+    state.quick = await writeQuickUnlock(state.config, { totp });
+  } catch {
+    // Keep the current share; it still works until it expires.
+  }
+}
+
+async function doCodeUnlock() {
+  if (state.busy || !state.config) return;
+  state.focusField = "code";
+  state.busy = true;
+  state.error = null;
+  render();
+
+  try {
+    const config = state.config;
+    let result;
+    try {
+      result = await unlockWithTotp(config, state.quick?.totp, state.form.code);
+    } catch (error) {
+      if (isQuickUnlockGone(error)) {
+        state.quick = await writeQuickUnlock(config, { totp: null });
+      }
+      throw new Error(quickErrorMessage(error));
+    } finally {
+      state.form.code = "";
+    }
+
+    let items = await decryptRows(result.rawKey, state.cache.items ?? []);
+    try {
+      items = (await loadRemoteForUnlock(config, result.token, result.rawKey)).items;
+    } catch {
+      // The release itself reached the server; a failed pull keeps the cache.
+    }
+    await enterVault(result.rawKey, result.token, items);
+  } catch (error) {
+    state.busy = false;
+    state.error = friendly(error);
+    render();
+  }
+}
+
+function openUnlockWindow(mode) {
+  return chrome.windows.create({
+    url: `${chrome.runtime.getURL("unlock.html")}?mode=${mode}`,
+    type: "popup",
+    width: 400,
+    height: 540,
+    focused: true,
+  });
+}
+
+async function toggleCodeUnlock() {
+  if (state.quickBusy || !state.config) return;
+  state.quickBusy = true;
+  state.error = null;
+  render();
+  try {
+    const quick = await readQuickUnlock(state.config);
+    if (quick?.totp) {
+      await revokeTotp(state.config, quick.totp);
+      state.quick = await writeQuickUnlock(state.config, { totp: null });
+      toast("Code unlock turned off");
+    } else {
+      const current = await session.get();
+      if (!current?.encryptionKeyB64) throw new Error("Unlock your vault first.");
+      const totp = await enrollTotp(state.config, current.token,
+        base64ToBytes(current.encryptionKeyB64), null);
+      state.quick = await writeQuickUnlock(state.config, { totp });
+      toast("Code unlock is on");
+    }
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "totp_disabled") {
+      state.error = "Turn on two-factor for your server account in the mobile app first (Settings → Server → Two-factor).";
+    } else if (error instanceof ApiError && error.status === 401) {
+      state.error = "Your server session expired. Lock, then unlock once with your master password.";
+    } else {
+      state.error = friendly(error);
+    }
+  } finally {
+    state.quickBusy = false;
+    render();
+  }
+}
+
+async function togglePasskeyUnlock() {
+  if (state.quickBusy || !state.config) return;
+  const quick = await readQuickUnlock(state.config);
+  if (quick?.passkey) {
+    state.quick = await writeQuickUnlock(state.config, { passkey: null });
+    render();
+    toast("Passkey unlock removed");
+    return;
+  }
+  // WebAuthn closes the toolbar popup when the OS dialog takes focus, so the
+  // ceremony runs in a small extension window instead.
+  await openUnlockWindow("passkey-setup");
 }
 
 async function lockVault(automatic = false) {
@@ -493,6 +622,8 @@ async function lockVault(automatic = false) {
   state.reveal = {};
   state.form.password = "";
   state.form.totp = "";
+  state.form.code = "";
+  state.focusField = null;
   state.needsTotp = false;
   state.error = null;
   state.disconnectArmed = false;
@@ -778,7 +909,9 @@ async function disconnect() {
     return;
   }
 
-  await local.remove([CONFIG_KEY, CACHE_KEY]);
+  const quick = await readQuickUnlock(state.config);
+  if (quick?.totp) await revokeTotp(state.config, quick.totp);
+  await local.remove([CONFIG_KEY, CACHE_KEY, QUICK_KEY]);
   await session.clear();
   await chrome.storage.session.clear();
 
@@ -786,7 +919,8 @@ async function disconnect() {
   state.cache = { items: [], revision: 0, lastSyncedAt: 0 };
   state.items = [];
   state.session = null;
-  state.form = { serverUrl: "", email: "", password: "", totp: "", query: "" };
+  state.form = { serverUrl: "", email: "", password: "", totp: "", code: "", query: "" };
+  state.quick = null;
   state.disconnectArmed = false;
   state.view = "setup";
   state.error = null;
@@ -899,6 +1033,19 @@ document.addEventListener("click", async (event) => {
       disconnect();
       break;
 
+    case "passkey-unlock":
+      await openUnlockWindow("unlock");
+      if (!state.fullPage) window.close();
+      break;
+
+    case "quick-totp":
+      toggleCodeUnlock();
+      break;
+
+    case "quick-passkey":
+      togglePasskeyUnlock();
+      break;
+
     default:
       break;
   }
@@ -911,7 +1058,7 @@ document.addEventListener("input", (event) => {
   state.form[field] = event.target.value;
   markActive();
 
-  if ((field === "password" || field === "totp") && state.error) {
+  if ((field === "password" || field === "totp" || field === "code") && state.error) {
     state.error = null;
     document.querySelector(".callout.danger")?.remove();
   }
@@ -937,6 +1084,8 @@ document.addEventListener("submit", (event) => {
     doConnect();
   } else if (form.dataset.form === "unlock") {
     doUnlock();
+  } else if (form.dataset.form === "quick-code") {
+    doCodeUnlock();
   }
 });
 
@@ -951,6 +1100,13 @@ document.addEventListener("keydown", (event) => {
 });
 
 chrome.storage?.onChanged?.addListener((changes, area) => {
+  if (area === "local" && changes[QUICK_KEY] && state.config) {
+    // Passkey setup finishes in its own window; reflect it here.
+    void readQuickUnlock(state.config).then((quick) => {
+      state.quick = quick;
+      if (["locked", "settings"].includes(state.view) && !state.busy) render();
+    });
+  }
   if (area !== "local" || !changes[CONFIG_KEY]) return;
   const next = changes[CONFIG_KEY].newValue;
   if (!next && state.view !== "setup") {

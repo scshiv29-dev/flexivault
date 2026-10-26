@@ -1,5 +1,5 @@
 import http from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { openDatabase } from "./db.js";
 import { loadConfig } from "./config.js";
 import {
@@ -7,17 +7,22 @@ import {
   encryptString,
   loadSecret,
   randomToken,
+  safeEqualString,
   scryptHash,
   scryptVerify,
   signToken,
   verifyToken,
 } from "./crypto.js";
-import { generateTotpSecret, otpauthUrl, verifyTotp } from "./totp.js";
+import { generateTotpSecret, matchTotpStep, otpauthUrl, verifyTotp } from "./totp.js";
 
 const JSON_LIMIT_DEFAULT = 8 * 1024 * 1024;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ITEM_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const ENVELOPE_RE = /^v1\.[A-Za-z0-9+/=_-]+\.[A-Za-z0-9+/=_-]+$/;
+const SHARE_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
+const QUICK_UNLOCK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const QUICK_UNLOCK_MAX_SHARES = 10;
+const QUICK_UNLOCK_MAX_FAILURES = 5;
 
 class HttpError extends Error {
   constructor(status, message, code, extra = {}) {
@@ -133,6 +138,10 @@ function publicUser(user) {
     revision: user.revision,
     createdAt: user.created_at,
   };
+}
+
+function sha256(value) {
+  return createHash("sha256").update(String(value)).digest("base64");
 }
 
 function itemList(db, userId) {
@@ -456,7 +465,130 @@ export function createApp(overrides = {}) {
         `UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_enabled = 0, updated_at = ?
          WHERE id = ?`
       ).run(Date.now(), user.id);
+      // Quick unlock depends on TOTP; disabling 2FA revokes every browser.
+      db.prepare("DELETE FROM unlock_shares WHERE user_id = ?").run(user.id);
       json(res, 200, { totpEnabled: false });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/quick-unlock") {
+      // Enrolment needs a signed-in session, which the client only has after a
+      // master-password unlock. The share is returned once and never again
+      // except through /release.
+      const user = authenticate(req);
+      rateLimit(`quick-enroll:${user.id}`, 20, 60 * 60 * 1000);
+      if (!user.totp_enabled) {
+        throw new HttpError(400, "Turn on two-factor authentication first", "totp_disabled");
+      }
+      const body = await readJson(req, 32 * 1024);
+      const now = Date.now();
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        if (body.replaceId !== undefined) {
+          const replaceId = String(body.replaceId);
+          if (SHARE_ID_RE.test(replaceId)) {
+            db.prepare("DELETE FROM unlock_shares WHERE id = ? AND user_id = ?").run(
+              replaceId,
+              user.id
+            );
+          }
+        }
+        db.prepare("DELETE FROM unlock_shares WHERE user_id = ? AND expires_at <= ?").run(
+          user.id,
+          now
+        );
+        const id = randomToken(18);
+        const share = randomToken(32);
+        const deviceSecret = randomToken(32);
+        const expiresAt = now + QUICK_UNLOCK_TTL_MS;
+        db.prepare(
+          `INSERT INTO unlock_shares
+            (id, user_id, share, device_verifier, last_step, failures, created_at, expires_at)
+           VALUES (?, ?, ?, ?, 0, 0, ?, ?)`
+        ).run(id, user.id, encryptString(share, encryptionKey), sha256(deviceSecret), now, expiresAt);
+        // Keep only the newest few browsers per account.
+        db.prepare(
+          `DELETE FROM unlock_shares WHERE user_id = ? AND id NOT IN (
+             SELECT id FROM unlock_shares WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
+           )`
+        ).run(user.id, user.id, QUICK_UNLOCK_MAX_SHARES);
+        db.exec("COMMIT");
+        json(res, 201, { id, share, deviceSecret, expiresAt });
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/quick-unlock/release") {
+      rateLimit(`quick-release:${ip}`, 30, 15 * 60 * 1000);
+      const body = await readJson(req, 32 * 1024);
+      const id = readString(body.id, "id", { min: 16, max: 64 });
+      const deviceSecret = readString(body.deviceSecret, "deviceSecret", { min: 32, max: 128 });
+      const code = readString(body.code, "code", { min: 6, max: 6 });
+      if (!SHARE_ID_RE.test(id)) {
+        throw new HttpError(404, "Quick unlock is not set up", "quick_unlock_missing");
+      }
+      rateLimit(`quick-release-id:${id}`, 10, 15 * 60 * 1000);
+
+      const row = db.prepare("SELECT * FROM unlock_shares WHERE id = ?").get(id);
+      if (!row || !safeEqualString(sha256(deviceSecret), row.device_verifier)) {
+        throw new HttpError(404, "Quick unlock is not set up", "quick_unlock_missing");
+      }
+      if (row.expires_at <= Date.now()) {
+        db.prepare("DELETE FROM unlock_shares WHERE id = ?").run(id);
+        throw new HttpError(410, "Quick unlock expired", "quick_unlock_expired");
+      }
+      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(row.user_id);
+      const secret = user?.totp_enabled ? getTotpSecret(user) : null;
+      if (!user || !secret) {
+        db.prepare("DELETE FROM unlock_shares WHERE id = ?").run(id);
+        throw new HttpError(404, "Quick unlock is not set up", "quick_unlock_missing");
+      }
+
+      const step = matchTotpStep(secret, code);
+      if (step < 0 || step <= row.last_step) {
+        const failures = row.failures + 1;
+        if (failures >= QUICK_UNLOCK_MAX_FAILURES) {
+          // A stolen device secret gets a handful of guesses, then the
+          // browser must unlock with the master password and enrol again.
+          db.prepare("DELETE FROM unlock_shares WHERE id = ?").run(id);
+          throw new HttpError(401, "Too many wrong codes. Use your master password.",
+            "quick_unlock_revoked");
+        }
+        db.prepare("UPDATE unlock_shares SET failures = ? WHERE id = ?").run(failures, id);
+        throw new HttpError(401, "Invalid two-factor code", "invalid_totp");
+      }
+
+      let share;
+      try {
+        share = decryptString(row.share, encryptionKey);
+      } catch {
+        throw new HttpError(500, "Stored unlock share is unreadable", "server_key_mismatch");
+      }
+      db.prepare("UPDATE unlock_shares SET last_step = ?, failures = 0 WHERE id = ?").run(step, id);
+      json(res, 200, {
+        share,
+        token: issueToken(user),
+        expiresIn: config.tokenTtlSeconds,
+        ...publicUser(user),
+      });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/quick-unlock/revoke") {
+      rateLimit(`quick-revoke:${ip}`, 30, 15 * 60 * 1000);
+      const body = await readJson(req, 32 * 1024);
+      const id = String(body.id ?? "");
+      const deviceSecret = String(body.deviceSecret ?? "");
+      if (SHARE_ID_RE.test(id)) {
+        const row = db.prepare("SELECT device_verifier FROM unlock_shares WHERE id = ?").get(id);
+        if (row && safeEqualString(sha256(deviceSecret), row.device_verifier)) {
+          db.prepare("DELETE FROM unlock_shares WHERE id = ?").run(id);
+        }
+      }
+      json(res, 200, { revoked: true });
       return;
     }
 

@@ -1074,3 +1074,38 @@ body.fullpage .toast {
     padding-bottom: 16px;
   }
 }
+
+/* Quick unlock (passkey / authenticator code) above the master password. */
+.quick-unlock {
+  margin-bottom: 4px;
+}
+.quick-unlock > .btn {
+  margin-bottom: 12px;
+}
+.quick-code .inline-field {
+  display: flex;
+  gap: 8px;
+}
+.quick-code .inline-field input {
+  flex: 1;
+  min-width: 0;
+  letter-spacing: 0.16em;
+}
+.quick-code .inline-field .btn {
+  width: auto;
+  padding: 0 18px;
+}
+.divider-text {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 14px;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.divider-text::before,
+.divider-text::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border-strong);
+}

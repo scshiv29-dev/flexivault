@@ -72,6 +72,36 @@ class FlexiVaultAutofillModule(
     }.start()
   }
 
+  /**
+   * Wraps the vault key for fingerprint/face unlock of locked forms. Only the
+   * app calls this, while unlocked and with biometric unlock turned on.
+   */
+  @ReactMethod
+  fun setBiometricUnlockKey(keyB64: String, promise: Promise) {
+    Thread {
+      val key = try { java.util.Base64.getDecoder().decode(keyB64) } catch (_: Exception) { null }
+      try {
+        requireNotNull(key) { "Invalid vault key." }
+        AutofillBiometricKey.store(reactContext, key)
+        promise.resolve(null)
+      } catch (exception: Exception) {
+        promise.reject("autofill_biometric_failed", exception.message, exception)
+      } finally {
+        key?.fill(0)
+      }
+    }.start()
+  }
+
+  @ReactMethod
+  fun clearBiometricUnlockKey(promise: Promise) {
+    try {
+      AutofillBiometricKey.clear(reactContext)
+      promise.resolve(null)
+    } catch (exception: Exception) {
+      promise.reject("autofill_biometric_failed", exception.message, exception)
+    }
+  }
+
   @ReactMethod
   fun lock(promise: Promise) {
     AutofillSession.lock()

@@ -39,6 +39,19 @@ internal object AutofillVaultReader {
     open(context)?.use { meta(it)["settings.autoLockMinutes"]?.toIntOrNull() } ?: 5
   } catch (_: Exception) { 5 }
 
+  /** Mirrors the app's biometric-unlock setting; off means master password only. */
+  fun biometricsEnabled(context: Context): Boolean = try {
+    open(context)?.use { meta(it)["settings.biometricsEnabled"] == "1" } ?: false
+  } catch (_: Exception) { false }
+
+  fun matchesVault(context: Context, key: ByteArray): Boolean = try {
+    open(context)?.use { db ->
+      val expected = Base64.getDecoder().decode(meta(db)["vault.keyCheck"] ?: "")
+      expected.isNotEmpty() &&
+        MessageDigest.isEqual(expected, MessageDigest.getInstance("SHA-256").digest(key))
+    } ?: false
+  } catch (_: Exception) { false }
+
   fun unlock(context: Context, password: String): ByteArray {
     val values = open(context)?.use(::meta) ?: error("No vault exists on this device.")
     check(values["settings.autofillEnabled"] == "1") { "Autofill is disabled." }

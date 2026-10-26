@@ -104,11 +104,80 @@ class AutofillAuthActivity : FragmentActivity() {
     }
 
     if (needsUnlock) {
-      showMasterPassword()
+      if (canUseBiometricUnlock()) promptBiometricUnlock() else showMasterPassword()
       return
     }
 
     authenticateDevice()
+  }
+
+  /** Biometric vault unlock is available only when the user turned it on in
+   * the app and the Keystore-wrapped vault key still exists and matches. */
+  private fun canUseBiometricUnlock(): Boolean =
+    AutofillVaultReader.biometricsEnabled(this) &&
+      AutofillBiometricKey.has(this) &&
+      AutofillBiometricKey.canPrompt(this)
+
+  private fun promptBiometricUnlock() {
+    val cipher = AutofillBiometricKey.decryptCipher(this)
+    if (cipher == null) {
+      showMasterPassword("Fingerprint or face changed. Enter your master password once in the app to turn it back on.")
+      return
+    }
+    // Clear any password surface; the system prompt draws over the form.
+    setContentView(FrameLayout(this))
+    val prompt = BiometricPrompt(
+      this,
+      ContextCompat.getMainExecutor(this),
+      object : BiometricPrompt.AuthenticationCallback() {
+        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+          val authenticated = result.cryptoObject?.cipher ?: return showMasterPassword()
+          Thread {
+            val key = try {
+              AutofillBiometricKey.unwrap(this@AutofillAuthActivity, authenticated)
+            } catch (_: Exception) { null }
+            val valid = key != null && AutofillVaultReader.matchesVault(this@AutofillAuthActivity, key)
+            runOnUiThread {
+              if (finished || isDestroyed || epoch != AutofillSession.epoch()) {
+                key?.fill(0)
+                cancel()
+              } else if (!valid) {
+                key?.fill(0)
+                // The vault was reset or re-created since biometrics were set up.
+                AutofillBiometricKey.clear(this@AutofillAuthActivity)
+                showMasterPassword("Your vault changed. Enter your master password.")
+              } else {
+                vaultKey = key
+                // The biometric (or device credential) check already happened.
+                Thread { succeed() }.start()
+              }
+            }
+          }.start()
+        }
+
+        override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+          if (finished) return
+          if (errorCode == BiometricPrompt.ERROR_CANCELED) {
+            // The system dismissed the prompt (e.g. the form went away).
+            cancel()
+          } else {
+            // Back/cancel, "Use master password", lockout or hardware trouble.
+            // Android 11+ shows no negative button when the device PIN is
+            // allowed, so cancelling must still offer the master password.
+            showMasterPassword()
+          }
+        }
+      },
+    )
+    val builder = BiometricPrompt.PromptInfo.Builder()
+      .setTitle("Unlock FlexiVault")
+      .setSubtitle(expectedWebDomain?.let { "Fill $it" } ?: "Fill this form without opening your vault")
+      .setAllowedAuthenticators(AutofillBiometricKey.authenticators())
+      .setConfirmationRequired(false)
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+      builder.setNegativeButtonText("Use master password")
+    }
+    prompt.authenticate(builder.build(), BiometricPrompt.CryptoObject(cipher))
   }
 
   private fun authenticateDevice() {
@@ -303,10 +372,11 @@ class AutofillAuthActivity : FragmentActivity() {
       .filter { it.second > 0 }.sortedByDescending { it.second }.take(8).map { it.first }
   }
 
-  private fun showMasterPassword() {
+  private fun showMasterPassword(notice: String? = null) {
+    if (finished) return
     window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
     window.setDimAmount(0.45f)
-    val card = overlay("Unlock FlexiVault", "Fill this form without opening your vault.")
+    val card = overlay("Unlock FlexiVault", notice ?: "Fill this form without opening your vault.")
     val label = TextView(this).apply {
       text = "Master password"
       textSize = 12f
@@ -377,6 +447,11 @@ class AutofillAuthActivity : FragmentActivity() {
     submit.setOnClickListener { submitPassword() }
     input.setOnEditorActionListener { _, _, _ -> submitPassword(); true }
     card.addView(submit)
+    if (canUseBiometricUnlock()) {
+      card.addView(action("Use fingerprint or face", false) {
+        if (!busy && !finished) promptBiometricUnlock()
+      })
+    }
     card.addView(action("Not now", false) { cancel() })
   }
 

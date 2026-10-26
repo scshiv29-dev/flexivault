@@ -118,6 +118,18 @@ export const api = {
     return request(baseUrl, "/api/sync", { token });
   },
 
+  quickUnlockEnroll(baseUrl, token, input = {}) {
+    return request(baseUrl, "/api/quick-unlock", { method: "POST", token, body: input });
+  },
+
+  quickUnlockRelease(baseUrl, input) {
+    return request(baseUrl, "/api/quick-unlock/release", { method: "POST", body: input });
+  },
+
+  quickUnlockRevoke(baseUrl, input) {
+    return request(baseUrl, "/api/quick-unlock/revoke", { method: "POST", body: input });
+  },
+
   putVault(baseUrl, token, input) {
     return request(baseUrl, "/api/sync", {
       method: "PUT",
