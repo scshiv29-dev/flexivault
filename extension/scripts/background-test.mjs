@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { bytesToBase64, deriveKeys, encryptItem, importVaultKey, keyCheck } from "../src/crypto.js";
 import { generateTotp } from "../src/otp.js";
 import { CACHE_KEY, CONFIG_KEY, SESSION_KEY } from "../src/store.js";
+import { PASSKEY_INFO, QUICK_KEY, TOTP_INFO, configIdentity, wrapVaultKey } from "../src/quick-unlock.js";
 
 function area() {
   let values = {};
@@ -485,5 +486,79 @@ response = await pendingUnlock;
 assert.equal(response.ok, false, "explicit lock during KDF cannot be undone by completion");
 assert.ok(!sessionArea.__get()[SESSION_KEY].encryptionKeyB64);
 assert.equal(typeof windowRemovedListener, "function", "unlock-window removal is monitored");
+
+// Quick unlock: the same capability-bound window can unlock with a TOTP code
+// (server releases a share) or a passkey PRF secret, never with a wrong one.
+const quickConfig = localArea.__get()[CONFIG_KEY];
+const share = crypto.getRandomValues(new Uint8Array(32));
+const prf = crypto.getRandomValues(new Uint8Array(32));
+await localArea.set({ [QUICK_KEY]: {
+  identity: configIdentity(quickConfig),
+  totp: { id: "share-id-0123456789", deviceSecret: "d".repeat(43), expiresAt: Date.now() + 864e5,
+    wrapped: await wrapVaultKey(derived.encryptionKey, share, TOTP_INFO) },
+  passkey: { credentialId: bytesToBase64(new Uint8Array(16).fill(5)), salt: bytesToBase64(new Uint8Array(32).fill(6)),
+    wrapped: await wrapVaultKey(derived.encryptionKey, prf, PASSKEY_INFO) },
+} });
+const releases = [];
+let releaseResponse = () => ({ status: 200, body: { share: bytesToBase64(share), token: "fresh-token" } });
+globalThis.fetch = async (url, init) => {
+  releases.push({ url, body: JSON.parse(init.body) });
+  const { status, body } = releaseResponse();
+  return { ok: status < 400, status, async text() { return JSON.stringify(body); } };
+};
+
+await sessionArea.set({ [SESSION_KEY]: { token: "retained-token" } });
+ticket = await begin();
+response = await request({ type: "flexivault:unlock-info", token: ticket.token }, unlockSender());
+assert.equal(response.totp, true, "unlock window learns that code unlock is available");
+assert.ok(response.passkey?.credentialId, "unlock window learns the passkey to ask for");
+assert.ok(!JSON.stringify(response).includes("wrapped") && !JSON.stringify(response).includes("deviceSecret"),
+  "unlock info never exposes the wrapped key or device secret");
+response = await request({ type: "flexivault:unlock-totp", token: ticket.token, code: "123456" }, page);
+assert.equal(response.ok, false, "content scripts cannot submit a code");
+
+releaseResponse = () => ({ status: 401, body: { code: "invalid_totp", error: "Invalid two-factor code" } });
+response = await request({ type: "flexivault:unlock-totp", token: ticket.token, code: "000000" }, unlockSender());
+assert.equal(response.ok, false);
+assert.match(response.error, /did not match/);
+assert.ok(!sessionArea.__get()[SESSION_KEY].encryptionKeyB64, "a wrong code keeps the vault locked");
+assert.ok(localArea.__get()[QUICK_KEY].totp, "a wrong code keeps code unlock enrolled");
+
+releaseResponse = () => ({ status: 200, body: { share: bytesToBase64(share), token: "fresh-token" } });
+response = await request({ type: "flexivault:unlock-totp", token: ticket.token, code: "123456" }, unlockSender());
+assert.equal(response.ok, true);
+assert.equal(releases.at(-1).url, "https://vault.test/api/quick-unlock/release");
+assert.deepEqual(releases.at(-1).body, { id: "share-id-0123456789", deviceSecret: "d".repeat(43), code: "123456" });
+assert.equal(sessionArea.__get()[SESSION_KEY].encryptionKeyB64, bytesToBase64(derived.encryptionKey));
+assert.equal(sessionArea.__get()[SESSION_KEY].token, "fresh-token", "code unlock also signs back in");
+assert.equal(unlockNotifications.at(-1).message.unlocked, true);
+
+await sessionArea.set({ [SESSION_KEY]: { token: "retained-token" } });
+ticket = await begin();
+releaseResponse = () => ({ status: 410, body: { code: "quick_unlock_expired", error: "expired" } });
+response = await request({ type: "flexivault:unlock-totp", token: ticket.token, code: "123456" }, unlockSender());
+assert.match(response.error, /expired/);
+assert.equal(localArea.__get()[QUICK_KEY].totp, null, "an expired share is forgotten locally");
+assert.ok(localArea.__get()[QUICK_KEY].passkey, "passkey unlock survives a lost code share");
+
+response = await request({ type: "flexivault:unlock-passkey", token: ticket.token,
+  secret: bytesToBase64(new Uint8Array(32).fill(1)) }, unlockSender());
+assert.equal(response.ok, false, "the wrong PRF secret cannot unwrap the key");
+assert.ok(!sessionArea.__get()[SESSION_KEY].encryptionKeyB64);
+response = await request({ type: "flexivault:unlock-passkey", token: ticket.token, secret: bytesToBase64(prf) }, page);
+assert.equal(response.ok, false, "content scripts cannot submit a passkey secret");
+response = await request({ type: "flexivault:unlock-passkey", token: ticket.token, secret: bytesToBase64(prf) }, unlockSender());
+assert.equal(response.ok, true);
+assert.equal(sessionArea.__get()[SESSION_KEY].encryptionKeyB64, bytesToBase64(derived.encryptionKey));
+assert.equal(sessionArea.__get()[SESSION_KEY].token, "retained-token", "passkey unlock keeps the stored token");
+
+// A quick-unlock record for another vault (different identity) is ignored.
+await localArea.set({ [QUICK_KEY]: { ...localArea.__get()[QUICK_KEY], identity: "other" } });
+await sessionArea.set({ [SESSION_KEY]: { token: "retained-token" } });
+ticket = await begin();
+response = await request({ type: "flexivault:unlock-info", token: ticket.token }, unlockSender());
+assert.equal(response.passkey, null);
+response = await request({ type: "flexivault:unlock-passkey", token: ticket.token, secret: bytesToBase64(prf) }, unlockSender());
+assert.equal(response.ok, false, "quick unlock is bound to the connected vault");
 
 console.log("Background worker checks passed.");

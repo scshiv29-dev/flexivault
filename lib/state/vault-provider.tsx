@@ -19,6 +19,7 @@ import {
   hasNativeAutofill,
   lockAutofill,
   readPendingAutofillSaves,
+  setAutofillBiometricKey,
 } from "@/lib/native/autofill";
 import {
   clearNativePasskeys,
@@ -498,6 +499,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       configureAutofill(items).catch(() => {
         // Do not break unlock or editing if the native cache cannot be written.
       });
+      // Biometric users get fingerprint/face unlock on locked forms. Refresh
+      // the wrapped key on unlock so 1.0.3 installs pick it up without
+      // re-enabling biometrics.
+      if (settingsRef.current.biometricsEnabled) {
+        setAutofillBiometricKey(bytesToBase64(keyRef.current)).catch(() => {});
+      }
     }, 300);
 
     return () => clearTimeout(timer);
@@ -1268,6 +1275,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     settingsRef.current = next;
     setSettings(next);
     await setMeta(META.biometricsEnabled, "1");
+    await setAutofillBiometricKey(bytesToBase64(derived.encryptionKey)).catch(() => {});
     setBiometricAvailable(true);
   }, []);
 
@@ -1277,6 +1285,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     settingsRef.current = next;
     setSettings(next);
     await setMeta(META.biometricsEnabled, "0");
+    await setAutofillBiometricKey(null).catch(() => {});
   }, []);
 
   /* ------------------------------ backup ----------------------------- */
@@ -1313,6 +1322,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     await wipeDatabase();
     await setSessionToken(null);
     await setBiometricKey(null);
+    await setAutofillBiometricKey(null).catch(() => {});
     await clearAutofillCache().catch(() => {});
     await clearNativePasskeys().catch(() => {});
 

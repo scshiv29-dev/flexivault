@@ -218,3 +218,102 @@ test("two-factor setup, login challenge and disable", async () => {
   });
   assert.equal(plainLogin.status, 200);
 });
+
+test("TOTP quick unlock releases a share once per code and is revocable", async () => {
+  const registered = await api("POST", "/api/accounts/register", {
+    body: {
+      email: "quick@example.com",
+      authHash: fakeAuthHash("quick-auth"),
+      kdfSalt: Buffer.alloc(16, 9).toString("base64"),
+      kdfIterations: 210000,
+    },
+  });
+  assert.equal(registered.status, 201);
+  const token = registered.payload.token;
+
+  const before2fa = await api("POST", "/api/quick-unlock", { token, body: {} });
+  assert.equal(before2fa.status, 400);
+  assert.equal(before2fa.payload.code, "totp_disabled");
+
+  const setup = await api("POST", "/api/2fa/setup", { token });
+  const secret = setup.payload.secret;
+  await api("POST", "/api/2fa/enable", { token, body: { code: totp(secret) } });
+
+  const unauthenticated = await api("POST", "/api/quick-unlock", { body: {} });
+  assert.equal(unauthenticated.status, 401);
+
+  const enrolled = await api("POST", "/api/quick-unlock", { token, body: {} });
+  assert.equal(enrolled.status, 201);
+  const { id, share, deviceSecret } = enrolled.payload;
+  assert.ok(id && share && deviceSecret);
+  assert.ok(enrolled.payload.expiresAt > Date.now());
+
+  const wrongDevice = await api("POST", "/api/quick-unlock/release", {
+    body: { id, deviceSecret: "x".repeat(43), code: totp(secret) },
+  });
+  assert.equal(wrongDevice.status, 404);
+
+  const previous = totp(secret, { timestamp: Date.now() - 30_000 });
+  const released = await api("POST", "/api/quick-unlock/release", {
+    body: { id, deviceSecret, code: previous },
+  });
+  assert.equal(released.status, 200);
+  assert.equal(released.payload.share, share);
+  assert.ok(released.payload.token);
+  assert.equal(released.payload.email, "quick@example.com");
+
+  const replay = await api("POST", "/api/quick-unlock/release", {
+    body: { id, deviceSecret, code: previous },
+  });
+  assert.equal(replay.status, 401);
+  assert.equal(replay.payload.code, "invalid_totp");
+
+  const next = await api("POST", "/api/quick-unlock/release", {
+    body: { id, deviceSecret, code: totp(secret) },
+  });
+  assert.equal(next.status, 200);
+
+  // Re-enrolling replaces the old share for this browser.
+  const replaced = await api("POST", "/api/quick-unlock", { token, body: { replaceId: id } });
+  assert.equal(replaced.status, 201);
+  const gone = await api("POST", "/api/quick-unlock/release", {
+    body: { id, deviceSecret, code: totp(secret, { timestamp: Date.now() + 30_000 }) },
+  });
+  assert.equal(gone.status, 404);
+
+  // Repeated wrong codes revoke the share.
+  const current = replaced.payload;
+  const wrong = totp(secret) === "000000" ? "111111" : "000000";
+  let last;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    last = await api("POST", "/api/quick-unlock/release", {
+      body: { id: current.id, deviceSecret: current.deviceSecret, code: wrong },
+    });
+  }
+  assert.equal(last.payload.code, "quick_unlock_revoked");
+  const afterRevoke = await api("POST", "/api/quick-unlock/release", {
+    body: { id: current.id, deviceSecret: current.deviceSecret, code: totp(secret) },
+  });
+  assert.equal(afterRevoke.status, 404);
+
+  // Explicit revoke and disabling 2FA both remove shares.
+  const third = (await api("POST", "/api/quick-unlock", { token, body: {} })).payload;
+  const revoked = await api("POST", "/api/quick-unlock/revoke", {
+    body: { id: third.id, deviceSecret: third.deviceSecret },
+  });
+  assert.equal(revoked.status, 200);
+  const afterExplicit = await api("POST", "/api/quick-unlock/release", {
+    body: { id: third.id, deviceSecret: third.deviceSecret, code: totp(secret) },
+  });
+  assert.equal(afterExplicit.status, 404);
+
+  const fourth = (await api("POST", "/api/quick-unlock", { token, body: {} })).payload;
+  await api("POST", "/api/2fa/disable", {
+    token,
+    body: { code: totp(secret, { timestamp: Date.now() + 30_000 }) },
+  });
+  const afterDisable = await api("POST", "/api/quick-unlock/release", {
+    body: { id: fourth.id, deviceSecret: fourth.deviceSecret, code: totp(secret) },
+  });
+  assert.equal(afterDisable.status, 404);
+});

@@ -17,6 +17,8 @@ interface NativeAutofillModule {
   readPendingSaves(): Promise<string>;
   clearAllPendingSaves(): Promise<void>;
   clearPendingSaves(ids: string[]): Promise<void>;
+  setBiometricUnlockKey(keyB64: string): Promise<void>;
+  clearBiometricUnlockKey(): Promise<void>;
 }
 
 const nativeModule: NativeAutofillModule | undefined =
@@ -82,6 +84,17 @@ export async function clearPendingAutofillSaves(ids: string[]): Promise<void> {
 export async function clearAllPendingAutofillSaves(): Promise<void> {
   if (!nativeModule) return;
   await nativeModule.clearAllPendingSaves();
+}
+
+/**
+ * Lets the locked-form overlay unlock with fingerprint or face. The key is
+ * wrapped by an Android Keystore key that needs a biometric check per use.
+ * Pass null to remove it (biometrics turned off, vault reset).
+ */
+export async function setAutofillBiometricKey(keyB64: string | null): Promise<void> {
+  if (!nativeModule) return;
+  if (keyB64) await nativeModule.setBiometricUnlockKey(keyB64);
+  else await nativeModule.clearBiometricUnlockKey();
 }
 
 export async function openAutofillSettings(): Promise<void> {

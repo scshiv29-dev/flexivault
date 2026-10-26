@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 
 import { createApp } from "../../server/src/app.js";
+import { totp as serverTotp } from "../../server/src/totp.js";
 import { api } from "../src/api.js";
 import {
   base64ToBytes,
@@ -512,6 +513,43 @@ try {
   await waitFor(() => query(".item-list"), "vault after reconnect", 30_000);
   click('[data-action="settings"]');
   await waitFor(() => bodyText().includes("Disconnect this browser"), "settings");
+
+  // Code unlock needs server 2FA. Without it, Settings explains why.
+  click('[data-action="quick-totp"]');
+  await waitFor(() => bodyText().includes("Turn on two-factor"), "2FA required hint");
+  const bearer = sessionArea.__get()["flexivault.session"].token;
+  const call = async (pathname, body) => (await fetch(`${server}${pathname}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
+    body: JSON.stringify(body ?? {}),
+  })).json();
+  const twoFactor = await call("/api/2fa/setup");
+  await call("/api/2fa/enable", { code: serverTotp(twoFactor.secret) });
+  click('[data-action="quick-totp"]');
+  await waitFor(() => bodyText().includes("Turn off"), "code unlock enabled");
+  const quick = localArea.__get()["flexivault.quick-unlock"];
+  assert.ok(quick?.totp?.wrapped && quick.totp.deviceSecret);
+  assert.ok(!JSON.stringify(quick).includes(sessionArea.__get()["flexivault.session"].encryptionKeyB64),
+    "the vault key is stored only in wrapped form");
+  pass("settings turns on code unlock once server 2FA is enabled");
+
+  click('[data-action="lock"]');
+  await waitFor(() => query("#quick-code"), "code field on lock screen");
+  assert.equal(document.activeElement?.id, "quick-code", "the code field gets focus first");
+  const wrongCode = serverTotp(twoFactor.secret) === "000000" ? "111111" : "000000";
+  type("#quick-code", wrongCode);
+  submit('[data-form="quick-code"]');
+  await waitFor(() => bodyText().includes("did not match"), "wrong code rejected");
+  assert.ok(!sessionArea.__get()["flexivault.session"].encryptionKeyB64);
+  type("#quick-code", serverTotp(twoFactor.secret, { timestamp: Date.now() - 30_000 }));
+  submit('[data-form="quick-code"]');
+  await waitFor(() => query(".item-list"), "vault after code unlock", 30_000);
+  await waitFor(() => bodyText().includes("Acme Portal"), "items after code unlock");
+  assert.ok(sessionArea.__get()["flexivault.session"].encryptionKeyB64);
+  pass("the lock screen unlocks with an authenticator code instead of the master password");
+
+  click('[data-action="settings"]');
+  await waitFor(() => bodyText().includes("Disconnect this browser"), "settings again");
   click('[data-action="disconnect"]');
   await waitFor(() => bodyText().includes("Tap again"), "disconnect armed");
   click('[data-action="disconnect"]');
@@ -522,7 +560,15 @@ try {
   assert.equal(localArea.__get()["flexivault.config"], undefined);
   assert.equal(localArea.__get()["flexivault.cache"], undefined);
   assert.equal(sessionArea.__get()["flexivault.session"], undefined);
-  pass("disconnect clears config, cache and session after confirmation");
+  assert.equal(localArea.__get()["flexivault.quick-unlock"], undefined);
+  const revoked = await fetch(`${server}/api/quick-unlock/release`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: quick.totp.id, deviceSecret: quick.totp.deviceSecret,
+      code: serverTotp(twoFactor.secret, { timestamp: Date.now() + 30_000 }) }),
+  });
+  assert.equal(revoked.status, 404, "disconnect revokes the server share");
+  pass("disconnect clears config, cache, session and quick unlock after confirmation");
 
   console.log(`\n${results.length} checks passed.\n`);
 } catch (error) {

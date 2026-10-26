@@ -45,6 +45,23 @@ export function openDatabase(dataDir) {
     -- column, so a separate user_id index only adds write cost.
     DROP INDEX IF EXISTS idx_vault_items_user;
 
+    -- TOTP quick unlock: a random share that, combined with a vault key the
+    -- client wrapped locally, unlocks one browser. The server never sees the
+    -- vault key; the client never stores the share. Released only for a valid,
+    -- never-reused TOTP code plus the device secret (stored here as SHA-256).
+    CREATE TABLE IF NOT EXISTS unlock_shares (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      share TEXT NOT NULL,
+      device_verifier TEXT NOT NULL,
+      last_step INTEGER NOT NULL DEFAULT 0,
+      failures INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_unlock_shares_user ON unlock_shares(user_id);
+
     CREATE TABLE IF NOT EXISTS server_meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL

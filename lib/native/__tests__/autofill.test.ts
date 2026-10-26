@@ -5,6 +5,8 @@ jest.mock("react-native", () => {
     clearPendingSaves: jest.fn(),
     readPendingSaves: jest.fn(),
     lock: jest.fn(),
+    setBiometricUnlockKey: jest.fn(),
+    clearBiometricUnlockKey: jest.fn(),
   };
   reactNative.Platform.OS = "android";
   return reactNative;
@@ -16,6 +18,7 @@ import {
   clearAllPendingAutofillSaves,
   clearPendingAutofillSaves,
   lockAutofill,
+  setAutofillBiometricKey,
 } from "../autofill";
 
 const native = NativeModules.FlexiVaultAutofill;
@@ -64,5 +67,25 @@ describe("pending autofill cleanup", () => {
     expect(native.lock).toHaveBeenCalledWith();
     expect(native.readPendingSaves).not.toHaveBeenCalled();
     expect(native.clearAllPendingSaves).not.toHaveBeenCalled();
+  });
+});
+
+describe("biometric form unlock key", () => {
+  beforeEach(() => {
+    jest.resetAllMocks();
+    native.setBiometricUnlockKey.mockResolvedValue(null);
+    native.clearBiometricUnlockKey.mockResolvedValue(null);
+  });
+
+  it("hands the vault key to the native Keystore wrapper", async () => {
+    await setAutofillBiometricKey("a2V5");
+    expect(native.setBiometricUnlockKey).toHaveBeenCalledWith("a2V5");
+    expect(native.clearBiometricUnlockKey).not.toHaveBeenCalled();
+  });
+
+  it("clears the wrapped key when biometrics are turned off", async () => {
+    await setAutofillBiometricKey(null);
+    expect(native.clearBiometricUnlockKey).toHaveBeenCalledWith();
+    expect(native.setBiometricUnlockKey).not.toHaveBeenCalled();
   });
 });

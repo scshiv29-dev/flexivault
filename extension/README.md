@@ -29,6 +29,13 @@ the internet.
 
 - Connect to any FlexiVault server and cache the encrypted vault locally.
 - Unlock with the master password; verify it offline with a key check.
+- Quick unlock (1.0.4), set up under **Settings → Quick unlock**:
+  - **Authenticator code** — unlock with your server account's 2FA code. Needs
+    server 2FA turned on (mobile app → Settings → Server).
+  - **Passkey** — unlock with Windows Hello, Touch ID, a phone or a security
+    key that supports the WebAuthn PRF extension.
+  Both appear in the toolbar popup and in the locked-form unlock window. The
+  master password always works.
 - Unlock directly from a locked login form. The inline action opens a small
   browser-owned FlexiVault window and returns to the same form automatically;
   users do not need to open the toolbar popup or full vault page.
@@ -131,6 +138,17 @@ reviewer demo account. Firefox is not supported yet.
   accepted only from that top-level `chrome-extension://` page. The website
   cannot read the password control or its keystrokes. Navigation, cancellation,
   explicit lock, configuration changes and timeout invalidate the capability.
+- Quick unlock never sends the vault key or master password anywhere. The
+  vault key is wrapped locally with AES-256-GCM:
+  - Code unlock: the wrapping key is HKDF of a random 256-bit share the server
+    stores (encrypted at rest) and releases only for this browser's device
+    secret plus a valid, never-reused TOTP code. Five wrong codes delete the
+    share; it expires after 30 days and is renewed silently on a master-password
+    unlock in the last week. Disabling server 2FA revokes every browser.
+  - Passkey unlock: the wrapping key is HKDF of the authenticator's PRF output
+    for a random salt; user verification is required. Nothing leaves the device.
+  WebAuthn runs in the browser-owned unlock window, not the toolbar popup,
+  because the OS dialog would close the popup.
 - Vault items are decrypted in the popup/full-page UI and in the background
   worker while the session is unlocked. The local cache in
   `chrome.storage.local` contains ciphertext envelopes, never plaintext.

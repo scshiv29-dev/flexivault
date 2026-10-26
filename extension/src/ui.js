@@ -134,6 +134,28 @@ function setupBody(state) {
   </main>`;
 }
 
+function quickUnlockHtml(state) {
+  const totp = Boolean(state.quick?.totp);
+  const passkey = Boolean(state.quick?.passkey);
+  if (!totp && !passkey) return "";
+  return `<div class="quick-unlock">
+    ${passkey ? `<button class="btn" type="button" data-action="passkey-unlock" ${state.busy ? "disabled" : ""}>
+      Unlock with passkey</button>` : ""}
+    ${totp ? `<form data-form="quick-code" class="quick-code">
+      <div class="field">
+        <label for="quick-code">AUTHENTICATOR CODE</label>
+        <div class="inline-field">
+          <input id="quick-code" data-field="code" inputmode="numeric" maxlength="6"
+            autocomplete="one-time-code" placeholder="6-digit code"
+            value="${escapeHtml(state.form.code ?? "")}" />
+          <button class="btn ${passkey ? "secondary" : ""}" type="submit" ${state.busy ? "disabled" : ""}>Unlock</button>
+        </div>
+      </div>
+    </form>` : ""}
+    <p class="divider-text"><span>or use your master password</span></p>
+  </div>`;
+}
+
 function lockedBody(state) {
   const initial = state.config?.email?.[0]?.toUpperCase() ?? "F";
   const cached = state.cache?.items?.length ?? 0;
@@ -146,6 +168,8 @@ function lockedBody(state) {
     </div>
 
     ${errorCallout(state)}
+
+    ${quickUnlockHtml(state)}
 
     <form data-form="unlock">
       <div class="field">
@@ -565,6 +589,32 @@ function settingsBody(state) {
           <div class="settings-title">Server knowledge</div>
           <div class="settings-sub">Ciphertext, auth verifier and KDF params only</div>
         </div>
+      </div>
+    </div>
+
+    <div class="section-label">Quick unlock</div>
+    <div class="settings-card">
+      <div class="settings-row">
+        <div class="settings-text">
+          <div class="settings-title">Authenticator code</div>
+          <div class="settings-sub">${state.quick?.totp
+            ? `On · renews when you next use your master password after ${escapeHtml(
+                new Date(Number(state.quick.totp.expiresAt) - 7 * 864e5).toLocaleDateString()
+              )}`
+            : "Unlock with your server's 2FA code instead of the master password"}</div>
+        </div>
+        <button class="mini-btn ${state.quick?.totp ? "muted" : ""}" data-action="quick-totp"
+          ${state.quickBusy ? "disabled" : ""}>${state.quick?.totp ? "Turn off" : "Turn on"}</button>
+      </div>
+      <div class="settings-row">
+        <div class="settings-text">
+          <div class="settings-title">Passkey</div>
+          <div class="settings-sub">${state.quick?.passkey
+            ? "On · Windows Hello, Touch ID, phone or security key"
+            : "Unlock with Windows Hello, Touch ID, your phone or a security key"}</div>
+        </div>
+        <button class="mini-btn ${state.quick?.passkey ? "muted" : ""}" data-action="quick-passkey"
+          ${state.quickBusy ? "disabled" : ""}>${state.quick?.passkey ? "Remove" : "Set up"}</button>
       </div>
     </div>
 

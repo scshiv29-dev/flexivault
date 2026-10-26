@@ -2,6 +2,7 @@
 
 import {
   base64ToBytes,
+  bytesToBase64,
   decryptItem,
   encryptItem,
   importVaultKey,
@@ -11,6 +12,15 @@ import { generateTotp } from "./src/otp.js";
 import { sameSite, siteHost } from "./src/presentation.js";
 import { pushDirtyCache } from "./src/sync.js";
 import { unlockCachedVault } from "./src/inline-unlock.js";
+import {
+  configIdentity,
+  isQuickUnlockGone,
+  quickErrorMessage,
+  readQuickUnlock,
+  unlockWithPasskeySecret,
+  unlockWithTotp,
+  writeQuickUnlock,
+} from "./src/quick-unlock.js";
 import {
   CACHE_KEY,
   CONFIG_KEY,
@@ -51,11 +61,6 @@ async function invalidateUnlockTickets() {
       await chrome.windows.remove(ticket.unlockWindowId).catch(() => {});
     }
   }
-}
-
-function configIdentity(config) {
-  return JSON.stringify([config?.serverUrl, config?.email, config?.kdfSalt,
-    config?.kdfIterations, config?.keyCheck]);
 }
 
 async function beginInlineUnlock(sender) {
@@ -132,10 +137,54 @@ async function unlockTicket(message, sender) {
   return { key, ticket, config };
 }
 
+const UNLOCK_SUBMITS = ["flexivault:unlock-submit", "flexivault:unlock-totp", "flexivault:unlock-passkey"];
+
+/** TOTP or passkey unlock from the trusted unlock window. Returns the same
+ * session shape as a master-password unlock, after validating the cache. */
+async function quickUnlock(config, message) {
+  const quick = await readQuickUnlock(config);
+  let rawKey;
+  let token = null;
+  if (message.type === "flexivault:unlock-totp") {
+    if (!quick?.totp) throw new Error("Code unlock is not set up on this browser.");
+    try {
+      ({ rawKey, token } = await unlockWithTotp(config, quick.totp, message.code));
+    } catch (error) {
+      if (isQuickUnlockGone(error)) await writeQuickUnlock(config, { totp: null });
+      throw new Error(quickErrorMessage(error));
+    }
+  } else {
+    if (!quick?.passkey) throw new Error("Passkey unlock is not set up on this browser.");
+    const secret = base64ToBytes(String(message.secret ?? ""));
+    try {
+      rawKey = await unlockWithPasskeySecret(config, quick.passkey, secret);
+    } finally {
+      secret.fill(0);
+    }
+  }
+  try {
+    const key = await importVaultKey(rawKey);
+    const cache = (await local.get(CACHE_KEY))[CACHE_KEY];
+    for (const row of cache?.items ?? []) await decryptItem(key, row.data);
+    return { encryptionKeyB64: bytesToBase64(rawKey), token };
+  } finally {
+    rawKey.fill(0);
+  }
+}
+
 async function handleInlineUnlock(message, sender) {
   const { key, ticket, config } = await unlockTicket(message, sender);
   if (message.type === "flexivault:unlock-info") {
-    return { ok: true, host: senderHost({ url: ticket.pageUrl }) };
+    const quick = await readQuickUnlock(config);
+    return {
+      ok: true,
+      host: senderHost({ url: ticket.pageUrl }),
+      totp: Boolean(quick?.totp),
+      // Not secret: the PRF output, not these values, wraps the vault key.
+      passkey: quick?.passkey
+        ? { credentialId: quick.passkey.credentialId, salt: quick.passkey.salt }
+        : null,
+    };
   }
   if (message.type === "flexivault:unlock-cancel") {
     await chrome.storage.session.remove(key);
@@ -144,14 +193,20 @@ async function handleInlineUnlock(message, sender) {
     unlocking.add(key);
     const epoch = unlockEpoch;
     try {
-      const cache = (await local.get(CACHE_KEY))[CACHE_KEY];
-      const encryptionKeyB64 = await unlockCachedVault(config, cache, message.password);
-      // Revalidate after the expensive KDF: cancel, navigation, disconnect and
-      // explicit lock must not be undone by an in-flight unlock.
+      let unlocked;
+      if (message.type === "flexivault:unlock-submit") {
+        const cache = (await local.get(CACHE_KEY))[CACHE_KEY];
+        unlocked = { encryptionKeyB64: await unlockCachedVault(config, cache, message.password) };
+      } else {
+        unlocked = await quickUnlock(config, message);
+      }
+      // Revalidate after the expensive KDF or network call: cancel, navigation,
+      // disconnect and explicit lock must not be undone by an in-flight unlock.
       await unlockTicket(message, sender);
       if (epoch !== unlockEpoch) throw new Error("The vault was locked. Start unlock again.");
       const current = await session.get();
-      await session.set({ encryptionKeyB64, token: current?.token ?? null,
+      await session.set({ encryptionKeyB64: unlocked.encryptionKeyB64,
+        token: unlocked.token ?? current?.token ?? null,
         unlockedAt: Date.now(), lastActiveAt: Date.now() });
       decryptedVault = null;
       await chrome.storage.session.remove(key);
@@ -162,7 +217,7 @@ async function handleInlineUnlock(message, sender) {
   const options = ticket.documentId ? { documentId: ticket.documentId } : { frameId: ticket.frameId };
   await chrome.tabs.sendMessage(ticket.tabId, {
     type: "flexivault:unlock-complete", token: message.token,
-    unlocked: message.type === "flexivault:unlock-submit",
+    unlocked: message.type !== "flexivault:unlock-cancel",
   }, options).catch(() => {});
   return { ok: true };
 }
@@ -642,7 +697,7 @@ async function touch() {
 }
 
 async function handle(message, sender) {
-  if (["flexivault:unlock-info", "flexivault:unlock-submit", "flexivault:unlock-cancel"].includes(message.type)) {
+  if (["flexivault:unlock-info", "flexivault:unlock-cancel", ...UNLOCK_SUBMITS].includes(message.type)) {
     return handleInlineUnlock(message, sender);
   }
   const host = senderHost(sender);
@@ -764,7 +819,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     message?.type !== "flexivault:dismiss-save"
     && message?.type !== "flexivault:unlock-open"
     && message?.type !== "flexivault:unlock-info"
-    && message?.type !== "flexivault:unlock-submit"
+    && !UNLOCK_SUBMITS.includes(message?.type)
     && message?.type !== "flexivault:unlock-cancel"
     && message?.type !== "flexivault:unlock-close"
   ) {
