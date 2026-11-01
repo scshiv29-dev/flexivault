@@ -450,6 +450,8 @@ use an EAS preview build; the seeded account and server URL work the same way.
   mapping, groups and safety notes.
 - [`docs/AUTOFILL.md`](docs/AUTOFILL.md) — Android autofill implementation,
   security model, testing steps and the iOS extension plan.
+- [`docs/NATIVE-ANDROID-MIGRATION.md`](docs/NATIVE-ANDROID-MIGRATION.md) — proposed
+  move from React Native to native Android: size, performance and upgrade plan.
 - [`server/README.md`](server/README.md) — deployment, configuration, API,
   backup, security notes.
 - [`extension/README.md`](extension/README.md) — install, permissions, layout,
