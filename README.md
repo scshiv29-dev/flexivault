@@ -298,8 +298,10 @@ separate from GitHub Releases and is submitted manually.
 Distribution is through **GitHub Releases** and **GitHub Container Registry**;
 there is no Play Store or F-Droid listing.
 
-- Push a `v*` tag (for example `v1.0.0`) to build a signed APK, verify it, and
-  publish `FlexiVault-1.0.0.apk` plus a SHA-256 checksum on GitHub Releases.
+- Push a `v*` tag (for example `v1.0.0`) to build signed APKs, verify them, and
+  publish `FlexiVault-1.0.0-arm64-v8a.apk` (almost all current phones) and
+  `FlexiVault-1.0.0-armeabi-v7a.apk` (older 32-bit phones), with SHA-256
+  checksums, on GitHub Releases.
 - The same tag publishes the extension package
   `FlexiVault-Extension-<version>.zip` for the browser stores or unpacked use.
 - The same tag publishes

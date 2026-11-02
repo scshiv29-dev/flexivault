@@ -93,9 +93,13 @@ only what the screens use.
 | --- | ---: | --- |
 | Today, universal APK | 108.3 | Measured |
 | Phase 0, arm64-only APK, no R8 | 45.9 | Measured total minus the other three ABIs |
-| Phase 0, arm64-only with R8 and pruned fonts | Below 45.9 | Build to measure |
-| Native app, before R8 | About 20 | Above minus arm64 libraries and JS bundle; DEX would also lose its RN classes |
+| Phase 0, arm64 APK with R8 and pruned fonts | **34.4** | Measured (`armeabi-v7a`: 27.4) |
 | Native app, with R8 | **Budget: 15 or less** | A target to enforce, not a prediction |
+
+The phase 0 arm64 APK holds 22.50 MiB of native libraries, 6.00 MiB of DEX,
+2.81 MiB of JS bundle and 2.54 MiB of resources. Removing the libraries and
+bundle would leave about 9 MiB before the Kotlin and Compose UI is added, so the
+migration's remaining size saving is about 25 MiB.
 
 ## Performance: what the code suggests
 
@@ -199,12 +203,16 @@ master-password unlock. Never delete the vault because a secret is unreadable.
 
 ### Phase 0: quick wins and the decision gate
 
+Steps 1 to 3 are built and measured, and the arm64 R8 build was tried by hand on
+one phone (vivo I2212, Android 16) with no problems found. Step 4 has not been run.
+
 1. Build per-ABI APKs, and publish `arm64-v8a` plus `armeabi-v7a` in
    `release.yml`. Keep a universal APK only if a real user needs it.
 2. Enable R8 and resource shrinking. Test every flow, because reflection in React
    Native and Expo may need keep rules.
-3. Prune the unused `@expo/vector-icons` fonts. The code uses only Feather and
-   Ionicons, while the APK carries 25 font files.
+3. Prune the unused `@expo/vector-icons` fonts by importing Feather directly
+   rather than through the package barrel. This takes the APK from 25 font files
+   (2.55 MiB) to 7 (0.63 MiB).
 4. Run the benchmarks above and record them here.
 
 **Gate:** continue only if the remaining size and the measured startup, autofill
