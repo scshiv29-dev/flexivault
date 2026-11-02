@@ -97,21 +97,28 @@ cd android
 .\gradlew.bat --no-daemon :app:assembleRelease
 ```
 
-With a valid `android/keystore.properties`, the output is:
+With a valid `android/keystore.properties`, the output is one APK per ABI:
 
 ```text
-android/app/build/outputs/apk/release/app-release.apk
+android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
+android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
 ```
 
 Without signing material, Gradle produces
-`app-release-unsigned.apk`, which Android will not install. That is useful for
-inspecting the package, not for distribution.
+`app-<abi>-release-unsigned.apk`, which Android will not install. That is useful
+for inspecting the package, not for distribution.
+
+Release builds have R8 enabled. To test one on an x86_64 emulator:
+
+```bash
+./gradlew :app:assembleRelease -PreactNativeArchitectures=x86_64 -Pflexivault.releaseAbis=x86_64
+```
 
 Verify the signature:
 
 ```powershell
 & "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --print-certs `
-  android\app\build\outputs\apk\release\app-release.apk
+  android\app\build\outputs\apk\release\app-arm64-v8a-release.apk
 ```
 
 ## 5. GitHub Actions
@@ -133,9 +140,9 @@ Runs when a tag matching `v*` is pushed, or manually from the Actions tab:
 
 1. verifies the source and tests
 2. materializes the signing keystore from repository secrets
-3. builds `app-release.apk`
-4. verifies the signature and writes a SHA-256 checksum
-5. creates or updates the GitHub Release and uploads the APK + checksum
+3. builds one release APK each for `arm64-v8a` and `armeabi-v7a`
+4. verifies the signatures and writes SHA-256 checksums
+5. creates or updates the GitHub Release and uploads the APKs + checksums
 6. packages the browser extension as
    `FlexiVault-Extension-<version>.zip` and attaches it to the same release
 7. builds and pushes the server image to GHCR
@@ -191,8 +198,9 @@ git push origin v1.0.1
 
 Wait for the **Release** workflow. When it finishes:
 
-- **Releases** contains `FlexiVault-1.0.1.apk`,
-  `FlexiVault-1.0.1.apk.sha256`, `FlexiVault-Extension-1.0.1.zip` and
+- **Releases** contains `FlexiVault-1.0.1-arm64-v8a.apk` (almost all current
+  phones), `FlexiVault-1.0.1-armeabi-v7a.apk` (older 32-bit phones), a `.sha256`
+  file for each, `FlexiVault-Extension-1.0.1.zip` and
   `FlexiVault-Extension-1.0.1.zip.sha256`.
 - GHCR contains `latest`, `v1.0.1` and the commit tag for the server image.
 
