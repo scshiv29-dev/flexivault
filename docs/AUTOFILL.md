@@ -385,10 +385,22 @@ must be refreshed when a browser's signing certificate or package entry changes.
   login name and saved hosts. Generic tokens such as `com`, `android`, `mobile`,
   `app`, `login` and `account` are ignored, and a few short-brand aliases are
   recognised (`x`/`twitter`, `fb`/`facebook`, `ig`/`instagram`, `yt`/`youtube`).
-  The service does not infer matches for browser packages.
+  The service does not infer matches for browser packages. Phone-maker
+  browsers (vivo, OPPO/ColorOS, Xiaomi, Huawei, Samsung, UC) and Firefox's
+  `org.mozilla.fenix` are on the browser list, so they are matched by
+  `webDomain` rather than by the browser's app name.
+- The `webDomain` used is the one of the frame that holds the login fields, not
+  the first domain found in the view tree. An ad or captcha frame from another
+  site no longer decides which logins are offered.
 - FlexiVault's own package is excluded.
-- At most 8 datasets are returned for a request, ranked by explicit package,
-  exact/subdomain host, then inferred token overlap. Each matching login is a
+- Ranking: explicit package (100), exact host (95), parent-domain host (90),
+  then inferred token overlap. When any login matches by package or host,
+  token-inferred guesses are dropped from the list.
+- If the username field already has text (the user started typing, or typed it
+  before moving to the password field), only logins whose username starts with
+  that text are offered (case-insensitive). Android keeps applying the same
+  prefix filter to the datasets as the user types.
+- At most 40 datasets are returned for a request. Each matching login is a
   separate dataset, so several saved accounts for the same site or app appear as
   separate choices in Android's autofill picker.
 - A username field is filled only when the login has a non-empty username. The

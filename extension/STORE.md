@@ -113,8 +113,8 @@ Features:
   written locally first, then synced to your own server.
 - Live TOTP codes on one-time-code fields, plus a code view with a countdown.
 - Reveal or copy passwords, card data, identities and notes on demand.
-- Host matching rejects look-alike domains, and the extension auto-locks after
-  15 idle minutes.
+- Host matching rejects look-alike domains. An unlocked vault stays unlocked
+  until you lock it or close the browser; the key is never written to disk.
 - No analytics, telemetry, remote fonts or remote code.
 
 Requirements:

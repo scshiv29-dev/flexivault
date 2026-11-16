@@ -56,14 +56,13 @@ class FlexiVaultAutofillService : AutofillService() {
       val appLabel = if (isBrowser) null else resolveAppLabel(fields.packageName)
       val targetTokens = AutofillMatcher.targetTokens(fields.packageName, appLabel)
       val matches = if (canFill) {
-        logins
-          .map { login ->
-            login to AutofillMatcher.score(login, fields.webDomain, fields.packageName, targetTokens)
-          }
-          .filter { it.second > 0 }
-          .sortedByDescending { it.second }
-          .take(8)
-          .map { it.first }
+        AutofillMatcher.rank(
+          logins,
+          fields.webDomain,
+          fields.packageName,
+          targetTokens,
+          typed = fields.typedUsername,
+        )
       } else {
         emptyList()
       }

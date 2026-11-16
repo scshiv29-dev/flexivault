@@ -9,9 +9,10 @@ import {
   newItemId,
 } from "./src/crypto.js";
 import { generateTotp } from "./src/otp.js";
-import { sameSite, siteHost } from "./src/presentation.js";
+import { filterByTyped, sameSite, siteHost } from "./src/presentation.js";
 import { pushDirtyCache } from "./src/sync.js";
 import { unlockCachedVault } from "./src/inline-unlock.js";
+import { openUnlockWindows } from "./src/unlock-windows.js";
 import {
   configIdentity,
   isQuickUnlockGone,
@@ -44,6 +45,15 @@ const UNLOCK_PREFIX = "flexivault.inline-unlock.";
 const UNLOCK_TTL_MS = 2 * 60 * 1000;
 let unlockEpoch = 0;
 const unlocking = new Set();
+// Opening and closing form-unlock windows runs one request at a time. Without
+// this, two overlapping requests both miss each other's ticket and each opens
+// its own window.
+let unlockWindowQueue = Promise.resolve();
+function serialUnlockWindow(work) {
+  const run = unlockWindowQueue.then(work, work);
+  unlockWindowQueue = run.catch(() => {});
+  return run;
+}
 
 async function invalidateUnlockTickets() {
   const all = await chrome.storage.session.get(null);
@@ -84,6 +94,11 @@ async function beginInlineUnlock(sender) {
     if (Number.isInteger(windowId)) await chrome.windows.remove(windowId).catch(() => {});
   }
   if (old.length) await chrome.storage.session.remove(old);
+  // A standalone unlock window from the toolbar would be a second window for
+  // the same job. The form window unlocks the whole vault too, so close it.
+  for (const open of await openUnlockWindows()) {
+    if (open.mode === "unlock") await chrome.windows.remove(open.windowId).catch(() => {});
+  }
   await chrome.storage.session.set({ [key]: {
     tabId, frameId: sender.frameId ?? 0, documentId: sender.documentId ?? null,
     pageUrl: sender.url ?? sender.tab.url, createdAt: Date.now(),
@@ -705,8 +720,10 @@ async function handle(message, sender) {
     return { ok: false, error: "This page cannot request vault data." };
   }
 
-  if (message.type === "flexivault:unlock-open") return beginInlineUnlock(sender);
-  if (message.type === "flexivault:unlock-close") {
+  if (message.type === "flexivault:unlock-open") {
+    return serialUnlockWindow(() => beginInlineUnlock(sender));
+  }
+  if (message.type === "flexivault:unlock-close") return serialUnlockWindow(async () => {
     const key = `${UNLOCK_PREFIX}${String(message.token ?? "")}`;
     const ticket = (await chrome.storage.session.get(key))[key];
     if (ticket?.tabId === senderTabId(sender) && ticket.pageUrl === sender.url &&
@@ -717,7 +734,7 @@ async function handle(message, sender) {
       }
     }
     return { ok: true };
-  }
+  });
 
   if (message.type === "flexivault:suggest") {
     const kind = message.kind === "otp" ? "otp" : "login";
@@ -732,7 +749,11 @@ async function handle(message, sender) {
       ok: true,
       configured: true,
       locked: false,
-      items: candidates(vault, host, kind)
+      // With many saved accounts on one site, the username the user started
+      // typing picks the suggestions before the list is capped.
+      items: (kind === "login"
+        ? filterByTyped(candidates(vault, host, kind), message.query)
+        : candidates(vault, host, kind))
         .slice(0, MAX_SUGGESTIONS)
         .map(suggestion),
     };

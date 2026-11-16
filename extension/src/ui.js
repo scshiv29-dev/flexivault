@@ -194,7 +194,7 @@ function lockedBody(state) {
 
     <p class="tiny center" style="margin-top:13px">
       ${cached > 0 ? `${cached} encrypted items cached on this browser` : "No local cache yet"}
-      · auto-locks after 15 minutes
+      · stays unlocked until you lock it or close the browser
     </p>
 
     <div class="center" style="margin-top:12px">

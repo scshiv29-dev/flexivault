@@ -41,7 +41,9 @@ the internet.
   users do not need to open the toolbar popup or full vault page.
 - Search and filter logins, cards, secure notes, identities and 2FA items in the
   popup or a responsive full-page vault tab.
-- Suggest saved logins inline when a matching login field gets focus. The
+- Suggest saved logins inline when a matching login field gets focus. Typing a
+  username or email narrows the list (exact, then prefix, then contains), and a
+  password field uses the username already typed in its form. The
   suggestion contains only a name and username; the password is decrypted and
   sent to the content script only after you choose it.
 - Suggest live TOTP codes inline on `autocomplete="one-time-code"` and other
@@ -56,8 +58,9 @@ the internet.
   the local cache first, marked dirty, then pushed to the configured server with
   a revision conflict merge.
 - Open the saved website and sync on demand.
-- Auto-lock after 15 idle minutes, keeping the bearer token for a silent
-  re-authentication on the next unlock.
+- Stay unlocked for the browser session: the vault key lives only in
+  `chrome.storage.session`, so it is gone when the browser closes or you press
+  Lock. The bearer token is kept for a silent re-authentication on next unlock.
 - Disconnect this browser, removing the cached vault, token and config.
 
 Cards, identities and notes are view-only here; edit them on mobile.

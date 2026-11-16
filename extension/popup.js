@@ -13,6 +13,7 @@ import {
   secondsRemaining,
 } from "./src/otp.js";
 import { sameSite, siteHost, withScheme } from "./src/presentation.js";
+import { openUnlockWindows } from "./src/unlock-windows.js";
 import {
   CACHE_KEY,
   CONFIG_KEY,
@@ -555,14 +556,35 @@ async function doCodeUnlock() {
   }
 }
 
-function openUnlockWindow(mode) {
-  return chrome.windows.create({
-    url: `${chrome.runtime.getURL("unlock.html")}?mode=${mode}`,
-    type: "popup",
-    width: 400,
-    height: 540,
-    focused: true,
-  });
+let openingUnlockWindow = false;
+
+/** Opens the extension unlock window, or focuses the one already open, so a
+ * passkey or unlock request never shows two windows. */
+async function openUnlockWindow(mode, method = null) {
+  if (openingUnlockWindow) return null;
+  openingUnlockWindow = true;
+  try {
+    for (const open of await openUnlockWindows()) {
+      // A website form unlock also unlocks the vault, so reuse it for "unlock".
+      const reusable = open.mode === mode || (mode === "unlock" && open.mode === "form");
+      if (reusable) {
+        await chrome.windows.update(open.windowId, { focused: true });
+        return { id: open.windowId };
+      }
+      await chrome.windows.remove(open.windowId).catch(() => {});
+    }
+    const query = new URLSearchParams({ mode });
+    if (method) query.set("method", method);
+    return await chrome.windows.create({
+      url: `${chrome.runtime.getURL("unlock.html")}?${query}`,
+      type: "popup",
+      width: 400,
+      height: 540,
+      focused: true,
+    });
+  } finally {
+    openingUnlockWindow = false;
+  }
 }
 
 async function toggleCodeUnlock() {
@@ -1034,7 +1056,8 @@ document.addEventListener("click", async (event) => {
       break;
 
     case "passkey-unlock":
-      await openUnlockWindow("unlock");
+      // The window starts the passkey prompt itself, so one click is enough.
+      await openUnlockWindow("unlock", "passkey");
       if (!state.fullPage) window.close();
       break;
 

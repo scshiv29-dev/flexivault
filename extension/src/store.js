@@ -4,7 +4,11 @@ export const CONFIG_KEY = "flexivault.config";
 export const CACHE_KEY = "flexivault.cache";
 export const SESSION_KEY = "flexivault.session";
 
-export const AUTO_LOCK_MS = 15 * 60 * 1000;
+/* The unlocked key lives only in chrome.storage.session, which the browser
+ * clears when it closes. By default the vault stays unlocked for that whole
+ * browser session, until the user locks it or the browser exits. Set a positive
+ * value here to add an inactivity lock on top of that. */
+export const AUTO_LOCK_MS = 0;
 
 export const local = {
   async get(keys) {
@@ -36,6 +40,7 @@ export const session = {
 
 export function isSessionFresh(value) {
   if (!value?.encryptionKeyB64) return false;
+  if (!(AUTO_LOCK_MS > 0)) return true;
   const last = Number(value.lastActiveAt ?? value.unlockedAt ?? 0);
   return Date.now() - last < AUTO_LOCK_MS;
 }

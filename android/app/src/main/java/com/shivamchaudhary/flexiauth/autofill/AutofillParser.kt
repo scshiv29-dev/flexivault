@@ -11,6 +11,9 @@ data class AutofillFields(
   val passwordId: AutofillId?,
   val webDomain: String?,
   val packageName: String?,
+  /** Text already in the username field (what the user started typing), used
+   * to narrow the suggestions. Null when the field is empty. */
+  val typedUsername: String? = null,
 )
 
 data class AutofillSaveData(
@@ -30,22 +33,25 @@ object AutofillParser {
     var firstUsernameId: AutofillId? = null
     var lastUsernameId: AutofillId? = null
     var passwordId: AutofillId? = null
-    var webDomain: String? = null
+    var firstDomain: String? = null
+    val domains = HashMap<AutofillId, String?>()
+    val nodes = HashMap<AutofillId, AssistStructure.ViewNode>()
+    var focusedUsernameId: AutofillId? = null
     var visited = 0
 
     for (windowIndex in 0 until structure.windowNodeCount) {
-      val queue = ArrayDeque<AssistStructure.ViewNode>()
-      queue.add(structure.getWindowNodeAt(windowIndex).rootViewNode)
+      val queue = ArrayDeque<Pair<AssistStructure.ViewNode, String?>>()
+      queue.add(structure.getWindowNodeAt(windowIndex).rootViewNode to null)
       while (queue.isNotEmpty() && visited < MAX_NODES) {
-        val node = queue.removeFirst()
+        val (node, inheritedDomain) = queue.removeFirst()
         visited += 1
 
-        if (webDomain == null) {
-          val domain = node.webDomain
-          if (!domain.isNullOrBlank()) {
-            webDomain = normaliseDomain(domain)
-          }
-        }
+        // A page can embed frames from other sites (ads, captchas, sign-in
+        // widgets). Track the domain of the frame that owns each field rather
+        // than taking the first domain seen anywhere in the tree.
+        val ownDomain = node.webDomain?.takeIf { it.isNotBlank() }?.let(::normaliseDomain)
+        val domain = ownDomain ?: inheritedDomain
+        if (firstDomain == null && ownDomain != null) firstDomain = ownDomain
 
         val id = node.autofillId
         if (id != null && node.visibility == View.VISIBLE && node.isEnabled && !isButton(node)) {
@@ -57,15 +63,19 @@ object AutofillParser {
               // pages place a submit button after the password).
               usernameId = lastUsernameId ?: firstUsernameId
             }
+            domains[id] = domain
           } else if (isUsernameField(node)) {
             if (firstUsernameId == null) firstUsernameId = id
             lastUsernameId = id
             if (passwordId == null && usernameId == null) usernameId = id
+            if (node.isFocused) focusedUsernameId = id
+            domains[id] = domain
+            nodes[id] = node
           }
         }
 
         for (childIndex in 0 until node.childCount) {
-          queue.add(node.getChildAt(childIndex))
+          queue.add(node.getChildAt(childIndex) to domain)
         }
       }
     }
@@ -73,12 +83,27 @@ object AutofillParser {
     if (passwordId == null && usernameId == null && firstUsernameId == null) {
       return null
     }
+    val resolvedUsernameId = usernameId ?: firstUsernameId
+    val fieldDomain = passwordId?.let { domains[it] }
+      ?: resolvedUsernameId?.let { domains[it] }
+    // Prefer the focused username field's text; otherwise the username that
+    // belongs to this password (typed before moving to the password field).
+    val typedNode = (focusedUsernameId ?: resolvedUsernameId)?.let { nodes[it] }
     return AutofillFields(
-      usernameId = usernameId ?: firstUsernameId,
+      usernameId = resolvedUsernameId,
       passwordId = passwordId,
-      webDomain = webDomain,
+      webDomain = fieldDomain ?: firstDomain,
       packageName = structure.activityComponent?.packageName,
+      typedUsername = typedNode?.let(::typedText),
     )
+  }
+
+  private fun typedText(node: AssistStructure.ViewNode): String? {
+    val value = nodeValue(node, allowTextFallback = true)?.trim() ?: return null
+    if (value.isEmpty() || value.length > 500) return null
+    // Some views report their placeholder as text when empty.
+    if (value == node.hint?.trim()) return null
+    return value
   }
 
   /**

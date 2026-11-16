@@ -8,8 +8,18 @@ package com.shivamchaudhary.flexiauth.autofill
  * against the login name and saved hosts. That inference lets a "Reddit" login
  * fill the Reddit app without requiring the user to add
  * `com.reddit.frontpage` manually.
+ *
+ * [rank] turns scores into the dataset list: a definite match (package or web
+ * domain) hides app-name guesses, and text the user already typed into the
+ * username field narrows the list before it is capped.
  */
 object AutofillMatcher {
+  /** Scores at or above this come from a package or web-domain match. */
+  const val DEFINITE_SCORE = 90
+  /** Most datasets returned for one request. Android filters these further by
+   * prefix as the user types, so the list must hold more than a screenful. */
+  const val MAX_DATASETS = 40
+
   private val SEPARATOR = Regex("[^a-z0-9]+")
   private val GENERIC_TOKENS = setOf(
     "com", "org", "net", "io", "co", "www", "app", "apps", "android",
@@ -31,23 +41,47 @@ object AutofillMatcher {
     "gm" to "gmail",
     "ms" to "microsoft",
   )
+  // Phone makers ship their own default browser (vivo, OPPO, Xiaomi, Huawei).
+  // An unlisted browser was treated as a native app, so logins were guessed
+  // from the words "browser" or the brand instead of the page's web domain.
   private val BROWSER_PACKAGES = setOf(
     "com.android.chrome",
     "com.chrome.beta",
     "com.chrome.dev",
     "com.chrome.canary",
+    "org.chromium.chrome",
+    "com.google.android.apps.chrome",
     "com.microsoft.emmx",
+    "com.microsoft.emmx.beta",
+    "com.microsoft.emmx.dev",
+    "com.microsoft.emmx.canary",
     "org.mozilla.firefox",
     "org.mozilla.firefox_beta",
+    "org.mozilla.fenix",
+    "org.mozilla.focus",
+    "org.mozilla.klar",
     "com.brave.browser",
+    "com.brave.browser_beta",
+    "com.brave.browser_nightly",
     "com.opera.browser",
+    "com.opera.browser.beta",
     "com.opera.mini.native",
+    "com.opera.gx",
     "com.sec.android.app.sbrowser",
+    "com.sec.android.app.sbrowser.beta",
     "com.duckduckgo.mobile.android",
     "com.vivaldi.browser",
     "com.kiwibrowser.browser",
     "com.yandex.browser",
-  )
+    "com.ecosia.android",
+    "com.vivo.browser",
+    "com.heytap.browser",
+    "com.coloros.browser",
+    "com.android.browser",
+    "com.mi.globalbrowser",
+    "com.huawei.browser",
+    "com.UCMobile.intl",
+  ).mapTo(HashSet()) { it.lowercase() }
 
   fun isBrowserPackage(packageName: String?): Boolean {
     val normalised = packageName?.trim()?.lowercase() ?: return false
@@ -78,8 +112,14 @@ object AutofillMatcher {
 
     if (!webDomain.isNullOrBlank()) {
       val target = normaliseHost(webDomain)
-      if (target != null && login.hosts.any { hostMatches(target, it) }) {
-        explicit = maxOf(explicit, 90)
+      if (target != null) {
+        // The exact host ranks above a parent domain, so a mail.example.com
+        // login comes before a generic example.com login on that page.
+        if (login.hosts.any { normaliseHost(it) == target && hostMatches(target, it) }) {
+          explicit = maxOf(explicit, 95)
+        } else if (login.hosts.any { hostMatches(target, it) }) {
+          explicit = maxOf(explicit, DEFINITE_SCORE)
+        }
       }
     }
 
@@ -98,6 +138,55 @@ object AutofillMatcher {
     val shared = loginTokens.intersect(targetTokens)
     if (shared.isEmpty()) return 0
     return 40 + minOf(shared.size * 5, 20)
+  }
+
+  /**
+   * Returns the logins to offer, best first.
+   *
+   * - When any login matches by package or web domain, logins guessed from the
+   *   app name are dropped. Otherwise a page with one exact match also showed
+   *   every login that happened to share a word with the app.
+   * - [typed] is what the user already entered in the username field. Only
+   *   logins whose username starts with it are kept (the same case-insensitive
+   *   prefix rule Android applies while the user keeps typing), so the right
+   *   account survives the [limit] cap on sites with hundreds of logins.
+   */
+  fun rank(
+    logins: List<AutofillLogin>,
+    webDomain: String?,
+    packageName: String?,
+    targetTokens: Set<String>,
+    typed: String? = null,
+    limit: Int = MAX_DATASETS,
+  ): List<AutofillLogin> {
+    val scored = logins.mapIndexedNotNull { index, login ->
+      val value = score(login, webDomain, packageName, targetTokens)
+      if (value > 0) Triple(login, value, index) else null
+    }
+    if (scored.isEmpty()) return emptyList()
+    val definite = scored.any { it.second >= DEFINITE_SCORE }
+    val pool = if (definite) scored.filter { it.second >= DEFINITE_SCORE } else scored
+    val query = typed?.trim()?.lowercase()?.ifEmpty { null }
+    val narrowed = if (query == null) {
+      pool
+    } else {
+      pool.filter { matchesTyped(it.first, query) }
+    }
+    return narrowed
+      .sortedWith(
+        compareByDescending<Triple<AutofillLogin, Int, Int>> { it.second }
+          .thenBy { if (query != null && it.first.username?.trim()?.lowercase() == query) 0 else 1 }
+          .thenBy { it.third },
+      )
+      .take(limit.coerceAtLeast(0))
+      .map { it.first }
+  }
+
+  /** Case-insensitive username prefix, matching Android's dataset filter. */
+  fun matchesTyped(login: AutofillLogin, typed: String?): Boolean {
+    val query = typed?.trim()?.lowercase()?.ifEmpty { null } ?: return true
+    val username = login.username?.trim()?.lowercase()?.ifEmpty { null } ?: return false
+    return username.startsWith(query)
   }
 
   fun hostMatches(targetDomain: String, savedHost: String): Boolean {

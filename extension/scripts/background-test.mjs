@@ -382,6 +382,26 @@ const updatedFill = await request({
 assert.equal(updatedFill.ok, true);
 assert.equal(updatedFill.password, "new-secret", "the updated password fills immediately");
 
+// The typed username narrows login suggestions in the worker, before the cap.
+response = await request({ type: "flexivault:suggest", kind: "login", query: "ADA@" });
+assert.deepEqual(response.items.map((item) => item.id), ["item_acme"], "typed username keeps the account");
+response = await request({ type: "flexivault:suggest", kind: "login", query: "someone-else" });
+assert.deepEqual(response.items, [], "typed text that matches no account offers nothing");
+response = await request({ type: "flexivault:suggest", kind: "login", query: "   " });
+assert.ok(response.items.some((item) => item.id === "item_acme"), "a blank query keeps every match");
+{
+  const { filterByTyped } = await import("../src/presentation.js");
+  const rows = [
+    { id: "contains", name: "A", username: "team-bob@x.test" },
+    { id: "name", name: "Bob's admin", username: "root@x.test" },
+    { id: "prefix", name: "B", username: "bob.smith@x.test" },
+    { id: "exact", name: "C", username: "bob" },
+    { id: "other", name: "D", username: "alice@x.test" },
+  ];
+  assert.deepEqual(filterByTyped(rows, " Bob ").map((row) => row.id),
+    ["exact", "prefix", "contains", "name"], "exact, prefix, contains, then name");
+}
+
 sessionArea.clear();
 await sessionArea.set({
   [SESSION_KEY]: {
@@ -390,7 +410,13 @@ await sessionArea.set({
   },
 });
 response = await request({ type: "flexivault:suggest", kind: "login" });
-assert.equal(response.locked, true, "an expired session is treated as locked");
+assert.equal(response.locked, false, "an idle session stays unlocked for the browser session");
+assert.ok(response.items.length > 0);
+
+// Closing the browser clears chrome.storage.session, which locks the vault.
+await sessionArea.remove(SESSION_KEY);
+response = await request({ type: "flexivault:suggest", kind: "login" });
+assert.equal(response.locked, true, "a cleared browser session is treated as locked");
 assert.deepEqual(response.items, []);
 response = await request({
   type: "flexivault:suggest-fill",
@@ -434,6 +460,22 @@ const begin = () => request({ type: "flexivault:unlock-open" }, page);
 response = await request({ type: "flexivault:suggest" }, page);
 assert.equal(response.locked, true);
 assert.deepEqual(response.items, [], "locked vault returns no identifying metadata");
+// Two overlapping unlock requests (double click, Enter + click) must leave
+// exactly one unlock window and one live capability.
+{
+  const windowsBefore = nextWindowId;
+  const [first, second] = await Promise.all([begin(), begin()]);
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  const liveTickets = Object.keys(sessionArea.__get())
+    .filter((name) => name.startsWith("flexivault.inline-unlock."));
+  assert.equal(liveTickets.length, 1, "overlapping unlock requests leave one capability");
+  assert.ok(removedWindows.includes(windowsBefore + 1), "the earlier unlock window is closed");
+  assert.ok(!removedWindows.includes(windowsBefore + 2), "the latest unlock window stays open");
+  await request({ type: "flexivault:unlock-close", token: second.token }, page);
+  assert.equal(Object.keys(sessionArea.__get())
+    .filter((name) => name.startsWith("flexivault.inline-unlock.")).length, 0);
+}
 let ticket = await begin();
 assert.equal(ticket.ok, true);
 assert.equal(typeof ticket.token, "string");

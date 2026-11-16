@@ -157,4 +157,144 @@ class AutofillMatcherTest {
     assertFalse(AutofillMatcher.isBrowserPackage("com.reddit.frontpage"))
     assertFalse(AutofillMatcher.isBrowserPackage(null))
   }
+
+  private fun entry(
+    id: String,
+    name: String = id,
+    username: String? = "$id@example.com",
+    hosts: List<String> = listOf("example.com"),
+    packages: List<String> = emptyList(),
+  ) = AutofillLogin(id, name, username, "pw-$id", hosts, packages)
+
+  private val chromeTokens = AutofillMatcher.targetTokens("com.android.chrome", "Chrome")
+
+  @Test
+  fun recognisesPhoneMakerAndFirefoxBrowsers() {
+    assertTrue(AutofillMatcher.isBrowserPackage("com.vivo.browser"))
+    assertTrue(AutofillMatcher.isBrowserPackage("org.mozilla.fenix"))
+    assertTrue(AutofillMatcher.isBrowserPackage("com.sec.android.app.sbrowser"))
+    assertTrue(AutofillMatcher.isBrowserPackage("com.UCMobile.intl"))
+    // vivo's browser used to be treated as a native app called "Browser", so
+    // logins were guessed from its name instead of the page's domain.
+    val vivo = AutofillMatcher.targetTokens("com.vivo.browser", "vivo Browser")
+    assertEquals(
+      0,
+      AutofillMatcher.score(
+        entry("vivo account", name = "vivo account", hosts = listOf("vivo.com")),
+        webDomain = "github.com",
+        packageName = "com.vivo.browser",
+        targetTokens = vivo,
+      ),
+    )
+  }
+
+  @Test
+  fun exactHostRanksAboveParentDomain() {
+    val parent = entry("parent", hosts = listOf("google.com"))
+    val exact = entry("exact", hosts = listOf("mail.google.com"))
+    val ranked = AutofillMatcher.rank(
+      listOf(parent, exact),
+      webDomain = "mail.google.com",
+      packageName = "com.android.chrome",
+      targetTokens = chromeTokens,
+    )
+    assertEquals(listOf("exact", "parent"), ranked.map { it.id })
+  }
+
+  @Test
+  fun definiteMatchesHideAppNameGuesses() {
+    val target = AutofillMatcher.targetTokens("com.reddit.frontpage", "Reddit")
+    val explicit = entry("app", name = "Reddit", hosts = emptyList(),
+      packages = listOf("com.reddit.frontpage"))
+    val guessed = entry("guess", name = "Reddit old", hosts = emptyList())
+    val ranked = AutofillMatcher.rank(
+      listOf(guessed, explicit),
+      webDomain = null,
+      packageName = "com.reddit.frontpage",
+      targetTokens = target,
+    )
+    assertEquals(listOf("app"), ranked.map { it.id })
+
+    // With no definite match, the app-name guess is still offered.
+    val onlyGuess = AutofillMatcher.rank(
+      listOf(guessed),
+      webDomain = null,
+      packageName = "com.reddit.frontpage",
+      targetTokens = target,
+    )
+    assertEquals(listOf("guess"), onlyGuess.map { it.id })
+  }
+
+  @Test
+  fun webDomainMatchHidesTokenGuessesInWebViewApps() {
+    val target = AutofillMatcher.targetTokens("com.example.shop", "Example Shop")
+    val web = entry("web", name = "Shop login", hosts = listOf("shop.example.com"))
+    val guess = entry("guess", name = "Example Shop staff", hosts = emptyList())
+    val ranked = AutofillMatcher.rank(
+      listOf(guess, web),
+      webDomain = "shop.example.com",
+      packageName = "com.example.shop",
+      targetTokens = target,
+    )
+    assertEquals(listOf("web"), ranked.map { it.id })
+  }
+
+  @Test
+  fun typedUsernameNarrowsHundredsOfLogins() {
+    val logins = (1..300).map { entry("user%03d".format(it)) }
+    val all = AutofillMatcher.rank(
+      logins,
+      webDomain = "example.com",
+      packageName = "com.android.chrome",
+      targetTokens = chromeTokens,
+    )
+    assertEquals(AutofillMatcher.MAX_DATASETS, all.size)
+    assertFalse("user257 is past the cap", all.any { it.id == "user257" })
+
+    val typed = AutofillMatcher.rank(
+      logins,
+      webDomain = "example.com",
+      packageName = "com.android.chrome",
+      targetTokens = chromeTokens,
+      typed = "  USER25 ",
+    )
+    assertEquals((250..259).map { "user%03d".format(it) }, typed.map { it.id })
+
+    val exact = AutofillMatcher.rank(
+      logins,
+      webDomain = "example.com",
+      packageName = "com.android.chrome",
+      targetTokens = chromeTokens,
+      typed = "user257@example.com",
+    )
+    assertEquals(listOf("user257"), exact.map { it.id })
+  }
+
+  @Test
+  fun typedTextThatMatchesNoUsernameOffersNothing() {
+    val logins = listOf(entry("ada"), entry("grace"), entry("blank", username = null))
+    val ranked = AutofillMatcher.rank(
+      logins,
+      webDomain = "example.com",
+      packageName = "com.android.chrome",
+      targetTokens = chromeTokens,
+      typed = "newperson@",
+    )
+    assertTrue(ranked.isEmpty())
+    assertFalse(AutofillMatcher.matchesTyped(entry("blank", username = null), "a"))
+    assertTrue(AutofillMatcher.matchesTyped(entry("blank", username = null), "  "))
+  }
+
+  @Test
+  fun typedFilterKeepsSiteMatchingRules() {
+    val lookalike = entry("evil", hosts = listOf("example.com.evil.test"))
+    val ranked = AutofillMatcher.rank(
+      listOf(lookalike),
+      webDomain = "example.com",
+      packageName = "com.android.chrome",
+      targetTokens = chromeTokens,
+      typed = "evil",
+    )
+    assertTrue(ranked.isEmpty())
+  }
 }

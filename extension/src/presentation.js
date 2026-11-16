@@ -122,6 +122,30 @@ export function withScheme(value) {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`;
 }
 
+/**
+ * Narrows login suggestions to what the user typed in the username field.
+ * Exact username first, then username prefix, then username or name contains.
+ * Returns the input unchanged for an empty query.
+ */
+export function filterByTyped(items, typed) {
+  const query = String(typed ?? "").trim().toLowerCase().slice(0, 200);
+  if (!query) return items;
+  const ranked = [];
+  items.forEach((item, index) => {
+    const username = String(item.username ?? "").trim().toLowerCase();
+    const name = String(item.name ?? "").toLowerCase();
+    let rank = -1;
+    if (username && username === query) rank = 0;
+    else if (username.startsWith(query)) rank = 1;
+    else if (username.includes(query)) rank = 2;
+    else if (name.includes(query)) rank = 3;
+    if (rank >= 0) ranked.push({ item, rank, index });
+  });
+  return ranked
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map((entry) => entry.item);
+}
+
 /** Hostname without `www.` or port, or "" when the value is not a URL. */
 export function siteHost(value) {
   if (!value) return "";
