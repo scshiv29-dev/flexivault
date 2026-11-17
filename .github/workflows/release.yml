@@ -107,6 +107,13 @@ jobs:
             echo "::error::Tag ${GITHUB_REF_NAME} does not match app.json version ${VERSION}."
             exit 1
           fi
+          # Obtainium compares the installed APK's versionName with the release
+          # tag. If they differ, it reports an update that never goes away.
+          VERSION_NAME=$(sed -n 's/^[[:space:]]*versionName[[:space:]]*"\([^"]*\)".*/\1/p' android/app/build.gradle)
+          if [[ "$GITHUB_REF_NAME" != "v${VERSION_NAME}" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match android/app/build.gradle versionName ${VERSION_NAME}."
+            exit 1
+          fi
 
       - name: Require signing secrets for tagged releases
         if: startsWith(github.ref, 'refs/tags/v') && env.ANDROID_KEYSTORE_BASE64 == ''
