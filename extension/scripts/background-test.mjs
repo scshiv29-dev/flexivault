@@ -402,6 +402,75 @@ assert.ok(response.items.some((item) => item.id === "item_acme"), "a blank query
     ["exact", "prefix", "contains", "name"], "exact, prefix, contains, then name");
 }
 
+// Multi-step sign-in: the username entered on the email step is remembered per
+// tab and puts that account first on a later password step with nothing typed.
+{
+  const stepTab = (url, id = 7) => ({ url, tab: { id, url } });
+  const emailStep = stepTab("https://login.acme.test/signin/identifier");
+  const passwordStep = stepTab("https://login.acme.test/signin/password");
+
+  response = await request({ type: "flexivault:suggest", kind: "login" }, passwordStep);
+  assert.deepEqual(response.items.map((item) => item.id), ["item_acme", "item_subdomain"],
+    "without a remembered username the usual order applies");
+
+  response = await request(
+    { type: "flexivault:remember-username", username: "  ADMIN@example.com " },
+    emailStep
+  );
+  assert.equal(response.ok, true);
+  const stored = sessionArea.__get()["flexivault.step-username.7"];
+  assert.equal(stored.username, "ADMIN@example.com", "the username is trimmed and kept per tab");
+  assert.ok(!JSON.stringify(sessionArea.__get()).includes("admin-password"), "no password is stored");
+
+  response = await request({ type: "flexivault:suggest", kind: "login" }, passwordStep);
+  assert.deepEqual(response.items.map((item) => item.id), ["item_subdomain", "item_acme"],
+    "the password step puts the account from the email step first");
+
+  response = await request(
+    { type: "flexivault:suggest", kind: "login", query: "ada@" },
+    passwordStep
+  );
+  assert.deepEqual(response.items.map((item) => item.id), ["item_acme"],
+    "a username typed on the page still wins over the remembered one");
+
+  response = await request(
+    { type: "flexivault:suggest", kind: "login" },
+    stepTab("https://login.acme.test/signin/password", 8)
+  );
+  assert.deepEqual(response.items.map((item) => item.id), ["item_acme", "item_subdomain"],
+    "another tab does not see the remembered username");
+
+  response = await request(
+    { type: "flexivault:remember-username", username: "admin@example.com" },
+    { ...stepTab("https://login.acme.test/signin/identifier"), frameId: 3 }
+  );
+  assert.equal(response.ok, false, "a subframe cannot set the remembered username");
+
+  await request(
+    { type: "flexivault:remember-username", username: "admin@example.com" },
+    stepTab("https://evil.test/signin")
+  );
+  response = await request({ type: "flexivault:suggest", kind: "login" }, passwordStep);
+  assert.deepEqual(response.items.map((item) => item.id), ["item_acme", "item_subdomain"],
+    "a username remembered on an unrelated site is ignored");
+
+  await request({ type: "flexivault:remember-username", username: "admin@example.com" }, emailStep);
+  const entry = sessionArea.__get()["flexivault.step-username.7"];
+  await sessionArea.set({
+    "flexivault.step-username.7": { ...entry, createdAt: Date.now() - 11 * 60 * 1000 },
+  });
+  response = await request({ type: "flexivault:suggest", kind: "login" }, passwordStep);
+  assert.deepEqual(response.items.map((item) => item.id), ["item_acme", "item_subdomain"],
+    "a remembered username expires");
+  assert.equal(sessionArea.__get()["flexivault.step-username.7"], undefined);
+
+  const { preferUsername } = await import("../src/presentation.js");
+  const rows = [{ id: "a", username: "a@x.test" }, { id: "b", username: "B@x.test" }, { id: "c", username: "c@x.test" }];
+  assert.deepEqual(preferUsername(rows, " b@X.test ").map((row) => row.id), ["b", "a", "c"]);
+  assert.deepEqual(preferUsername(rows, "").map((row) => row.id), ["a", "b", "c"]);
+  assert.deepEqual(preferUsername(rows, "nobody").map((row) => row.id), ["a", "b", "c"]);
+}
+
 sessionArea.clear();
 await sessionArea.set({
   [SESSION_KEY]: {

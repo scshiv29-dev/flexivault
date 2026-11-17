@@ -6,7 +6,7 @@
   "description": "FlexiVault browser extension — encrypted vault client with autofill, save prompts and TOTP",
   "scripts": {
     "check": "node scripts/check.mjs",
-    "test": "node scripts/content-test.mjs && node scripts/background-test.mjs && node scripts/smoke-test.mjs",
+    "test": "node scripts/content-test.mjs && node scripts/multi-step-test.mjs && node scripts/background-test.mjs && node scripts/smoke-test.mjs",
     "icons": "node scripts/generate-icons.cjs"
   }
 }
