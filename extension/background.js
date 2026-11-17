@@ -9,7 +9,7 @@ import {
   newItemId,
 } from "./src/crypto.js";
 import { generateTotp } from "./src/otp.js";
-import { filterByTyped, sameSite, siteHost } from "./src/presentation.js";
+import { filterByTyped, preferUsername, sameSite, siteHost } from "./src/presentation.js";
 import { pushDirtyCache } from "./src/sync.js";
 import { unlockCachedVault } from "./src/inline-unlock.js";
 import { openUnlockWindows } from "./src/unlock-windows.js";
@@ -36,6 +36,12 @@ const TOUCH_INTERVAL_MS = 15_000;
 const DECRYPT_BATCH_SIZE = 32;
 const PENDING_SAVE_PREFIX = "flexivault.pending-save.";
 const PENDING_SAVE_TTL_MS = 5 * 60 * 1000;
+// Multi-step sign-ins (AWS, Google, Microsoft) ask for the email on one step
+// and the password on a later step or page. The username entered first is kept
+// per tab, in memory-only session storage, so the password step can put that
+// account first.
+const STEP_USERNAME_PREFIX = "flexivault.step-username.";
+const STEP_USERNAME_TTL_MS = 10 * 60 * 1000;
 let lastTouchAt = 0;
 // Suggestion metadata and the encrypted row map stay in worker memory only.
 // Passwords and TOTP secrets are decrypted per fill; every read still requires
@@ -496,6 +502,40 @@ async function readPendingSave(tabId, vaultKey) {
   }
 }
 
+function stepUsernameKey(tabId) {
+  return `${STEP_USERNAME_PREFIX}${tabId}`;
+}
+
+async function rememberStepUsername(message, sender, host) {
+  const tabId = senderTabId(sender);
+  if (tabId == null || (sender.frameId ?? 0) !== 0) return { ok: false };
+  const username = cleanUsername(message.username);
+  const key = stepUsernameKey(tabId);
+  if (!username) {
+    await chrome.storage.session.remove(key);
+    return { ok: true };
+  }
+  await chrome.storage.session.set({
+    [key]: { host, username, createdAt: Date.now() },
+  });
+  return { ok: true };
+}
+
+async function readStepUsername(sender, host) {
+  const tabId = senderTabId(sender);
+  if (tabId == null) return "";
+  const key = stepUsernameKey(tabId);
+  const stored = (await chrome.storage.session.get(key))[key];
+  if (!stored || typeof stored.username !== "string") return "";
+  if (Date.now() - Number(stored.createdAt ?? 0) > STEP_USERNAME_TTL_MS) {
+    await chrome.storage.session.remove(key);
+    return "";
+  }
+  // The password step may be on a sibling host (signin.example.com after
+  // example.com), but never on an unrelated site.
+  return sameSite(stored.host, host) ? stored.username : "";
+}
+
 async function clearPendingSave(tabId) {
   if (tabId == null) return;
   await chrome.storage.session.remove(pendingSaveKey(tabId));
@@ -745,17 +785,22 @@ async function handle(message, sender) {
     if (vault.locked) {
       return { ok: true, configured: true, locked: true, items: [] };
     }
+    let matches = candidates(vault, host, kind);
+    if (kind === "login") {
+      // With many saved accounts on one site, the username the user started
+      // typing picks the suggestions before the list is capped.
+      matches = filterByTyped(matches, message.query);
+      // A password step without a username field has nothing typed: put the
+      // account entered on the earlier email step first.
+      if (!String(message.query ?? "").trim()) {
+        matches = preferUsername(matches, await readStepUsername(sender, host));
+      }
+    }
     return {
       ok: true,
       configured: true,
       locked: false,
-      // With many saved accounts on one site, the username the user started
-      // typing picks the suggestions before the list is capped.
-      items: (kind === "login"
-        ? filterByTyped(candidates(vault, host, kind), message.query)
-        : candidates(vault, host, kind))
-        .slice(0, MAX_SUGGESTIONS)
-        .map(suggestion),
+      items: matches.slice(0, MAX_SUGGESTIONS).map(suggestion),
     };
   }
 
@@ -827,6 +872,10 @@ async function handle(message, sender) {
     return dismissSave(sender, message.promptId);
   }
 
+  if (message.type === "flexivault:remember-username") {
+    return rememberStepUsername(message, sender, host);
+  }
+
   return undefined;
 }
 
@@ -838,6 +887,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     message?.type !== "flexivault:pending-save" &&
     message?.type !== "flexivault:save" &&
     message?.type !== "flexivault:dismiss-save"
+    && message?.type !== "flexivault:remember-username"
     && message?.type !== "flexivault:unlock-open"
     && message?.type !== "flexivault:unlock-info"
     && !UNLOCK_SUBMITS.includes(message?.type)
@@ -873,6 +923,10 @@ chrome.storage?.onChanged?.addListener((changes, area) => {
     unlockEpoch += 1;
     void invalidateUnlockTickets();
   }
+});
+
+chrome.tabs?.onRemoved?.addListener((tabId) => {
+  void chrome.storage.session.remove(stepUsernameKey(tabId)).catch(() => {});
 });
 
 chrome.runtime.onSuspend?.addListener(() => {

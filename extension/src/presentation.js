@@ -146,6 +146,24 @@ export function filterByTyped(items, typed) {
     .map((entry) => entry.item);
 }
 
+/**
+ * Moves the accounts whose username equals `username` (case-insensitive) to
+ * the front, keeping every other account in its original order. Multi-step
+ * sign-ins use this to put the account entered on the email step first when
+ * the password step has no username field of its own.
+ */
+export function preferUsername(items, username) {
+  const wanted = String(username ?? "").trim().toLowerCase();
+  if (!wanted) return items;
+  const preferred = [];
+  const rest = [];
+  for (const item of items) {
+    const value = String(item.username ?? "").trim().toLowerCase();
+    (value === wanted ? preferred : rest).push(item);
+  }
+  return [...preferred, ...rest];
+}
+
 /** Hostname without `www.` or port, or "" when the value is not a URL. */
 export function siteHost(value) {
   if (!value) return "";

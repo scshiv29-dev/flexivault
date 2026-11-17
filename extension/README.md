@@ -207,7 +207,12 @@ offers a save/update prompt.
 - Inline suggestions require an unlocked session, but a locked form can start a
   local unlock without opening the toolbar popup. The content script recognises
   login, username and common one-time-code fields, including fields inside open
-  shadow roots and email-only first-step sign-in pages. It cannot see closed
+  shadow roots and email-only first-step sign-in pages. On multi-step sign-ins
+  (email, optional captcha, then password on the same or a later page) it
+  offers a password field when it appears or is revealed while focused, and
+  lists the account whose username was entered on the earlier step first; that
+  username is kept per tab in session memory for 10 minutes. Captcha fields are
+  never offered or filled. It cannot see closed
   shadow roots, fields inside iframes, split one-character OTP boxes, or
   card/identity/CVC fields.
 - A save prompt can reappear after a full-page navigation on the originating

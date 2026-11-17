@@ -174,7 +174,11 @@ function looksLikeUsername(element) {
 
 function loginPageContext() {
   const url = String(location.href ?? "").toLowerCase();
-  if (/(^|[/.])(login|signin|sign-in|auth|session|oauth|account)([/.?#]|$)/.test(url)) {
+  if (
+    /(^|[/.])(login|log-in|logon|signin|sign-in|signon|auth|session|oauth|account|identifier)([/.?#]|$)/.test(
+      url
+    )
+  ) {
     return true;
   }
   const title = String(
@@ -193,6 +197,16 @@ function isSearchField(element) {
     return true;
   }
   return /\bsearch\b/.test(fieldHaystack(element)) && !/user|login|email/.test(fieldHaystack(element));
+}
+
+/** Captcha answers are typed by the user; FlexiVault never fills or offers them. */
+function isCaptchaField(element) {
+  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
+    return false;
+  }
+  return /captcha|challenge.?(response|answer)|security.?check|characters? (you see|shown)/.test(
+    fieldHaystack(element)
+  );
 }
 
 function isOtpField(element) {
@@ -295,6 +309,7 @@ function fieldKind(element) {
     if (element.autocomplete === "new-password") return null;
   }
 
+  if (isCaptchaField(element)) return null;
   if (isOtpField(element)) return "otp";
   if (element instanceof HTMLInputElement && element.type === "password") {
     return "login";
@@ -317,7 +332,8 @@ function findUsernameField(passwordField) {
         element.type
       ) &&
       !isOtpField(element) &&
-      !isSearchField(element)
+      !isSearchField(element) &&
+      !isCaptchaField(element)
   );
 
   if (fields.length === 0) return null;
@@ -937,10 +953,95 @@ function bindSaveForms(root = document) {
 
 bindSaveForms();
 setTimeout(() => bindSaveForms(), 1200);
+
+/* --------------------------- multi-step sign-in --------------------------- */
+
+/**
+ * Identifier-first sign-ins (AWS, Google, Microsoft) ask for the email, maybe
+ * show a captcha, and only then ask for the password — later in the same page
+ * or on a new page. The worker keeps the username entered on the first step
+ * for this tab, so the password step can put that account first.
+ */
+function rememberUsername(field) {
+  if (!isActiveInstance()) return;
+  if (!(field instanceof HTMLInputElement) || field.type === "password") return;
+  if (fieldKind(field) !== "login") return;
+  const username = String(field.value ?? "").trim().slice(0, 500);
+  if (!username) return;
+  if (typeof chrome === "undefined" || typeof chrome.runtime?.sendMessage !== "function") {
+    return;
+  }
+  void Promise.resolve(
+    chrome.runtime.sendMessage({ type: "flexivault:remember-username", username })
+  ).catch(() => {});
+}
+
+// Fields already offered once. A field that appears or becomes visible while
+// focused is offered automatically a single time; dismissing the list must not
+// bring it back on every later DOM change.
+const offeredFields = new WeakSet();
+
+function offerFocusedField() {
+  if (!isActiveInstance()) return;
+  const field = activeElementDeep();
+  if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
+  if (offeredFields.has(field)) return;
+  const kind = fieldKind(field);
+  if (!kind) return;
+  bindSaveForm(closestComposed(field, "form"));
+  scheduleRequest(field, kind);
+}
+
+function mutationTouchesFields(records) {
+  const active = activeElementDeep();
+  for (const record of records) {
+    if (record.type === "attributes") {
+      const target = record.target;
+      if (target === panelHost || target === saveHost) continue;
+      if (active && target instanceof Element && target.contains(active)) return true;
+      continue;
+    }
+    for (const node of record.addedNodes) {
+      if (!(node instanceof Element)) continue;
+      if (node === panelHost || node === saveHost) continue;
+      if (node.matches("input, form") || node.querySelector("input, form")) return true;
+    }
+  }
+  return false;
+}
+
+let revealTimer = null;
+if (typeof MutationObserver === "function") {
+  const revealObserver = new MutationObserver((records) => {
+    // A superseded instance, or a document being torn down, stops observing.
+    if (!isActiveInstance() || !globalThis.document?.documentElement) {
+      revealObserver.disconnect();
+      return;
+    }
+    if (!mutationTouchesFields(records)) return;
+    clearTimeout(revealTimer);
+    revealTimer = setTimeout(() => {
+      if (!isActiveInstance()) return;
+      bindSaveForms();
+      offerFocusedField();
+    }, 120);
+  });
+  revealObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class", "style", "hidden", "aria-hidden", "disabled", "readonly", "type"],
+  });
+}
+
+// A new page of a multi-step sign-in often autofocuses its password field
+// before this script runs, so no focus event reaches it.
+setTimeout(offerFocusedField, 0);
 setTimeout(() => void showPendingSave(), 250);
 
 function scheduleRequest(field, kind) {
   if (!isActiveInstance()) return;
+  offeredFields.add(field);
   clearTimeout(focusTimer);
   focusTimer = setTimeout(() => {
     void requestSuggestions(field, kind);
@@ -1143,6 +1244,26 @@ document.addEventListener(
     typingTimer = setTimeout(() => {
       void requestSuggestions(found.field, "login", { refresh: true });
     }, SUGGEST_DELAY_MS);
+  },
+  true
+);
+
+// Remember the username when the user leaves the field, presses Enter or the
+// extension fills it (setValue dispatches `change`).
+document.addEventListener(
+  "change",
+  (event) => {
+    if (!isActiveInstance()) return;
+    rememberUsername(fieldFromEvent(event));
+  },
+  true
+);
+
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (!isActiveInstance() || !event.isTrusted || event.key !== "Enter") return;
+    rememberUsername(fieldFromEvent(event));
   },
   true
 );
