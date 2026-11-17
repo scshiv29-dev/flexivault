@@ -1,4 +1,4 @@
-import { Feather } from "@expo/vector-icons";
+import Feather from "@expo/vector-icons/Feather";
 import { useRouter } from "expo-router";
 import type { BottomTabBarProps } from "expo-router/js-tabs";
 import * as Haptics from "expo-haptics";

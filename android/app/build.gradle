@@ -141,6 +141,16 @@ android {
             useLegacyPackaging enableLegacyPackaging.toBoolean()
         }
     }
+    // Release builds publish one APK per ABI, so a phone does not keep libraries
+    // it cannot load. Debug builds stay a single app-debug.apk.
+    splits {
+        abi {
+            enable gradle.startParameter.taskNames.any { it.toLowerCase().contains("release") }
+            reset()
+            include(*findProperty('flexivault.releaseAbis').split(",")*.trim())
+            universalApk false
+        }
+    }
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }

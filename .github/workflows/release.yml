@@ -127,13 +127,13 @@ jobs:
             printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
           } > android/keystore.properties
 
-      - name: Build the release APK
+      - name: Build the release APKs
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon :app:assembleRelease
+          ./gradlew --no-daemon :app:assembleRelease -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
 
-      - name: Collect the APK and checksum
+      - name: Collect the APKs and checksums
         id: package
         run: |
           VERSION=$(node -p "require('./app.json').expo.version")
@@ -143,32 +143,32 @@ jobs:
             NAME="FlexiVault-${VERSION}-${GITHUB_SHA::7}"
           fi
 
-          APK="android/app/build/outputs/apk/release/app-release.apk"
-          if [[ ! -f "$APK" ]]; then
-            APK="android/app/build/outputs/apk/release/app-release-unsigned.apk"
-          fi
-          if [[ ! -f "$APK" ]]; then
-            echo "::error::No release APK was produced."
-            exit 1
-          fi
-
           mkdir -p dist
-          cp "$APK" "dist/${NAME}.apk"
-          (
-            cd dist
-            sha256sum "${NAME}.apk" > "${NAME}.apk.sha256"
-          )
-
-          if [[ "${ANDROID_KEYSTORE_BASE64}" != "" ]]; then
-            APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
-            if [[ -n "$APKSIGNER" ]]; then
-              "$APKSIGNER" verify --verbose "dist/${NAME}.apk"
+          for ABI in arm64-v8a armeabi-v7a; do
+            APK="android/app/build/outputs/apk/release/app-${ABI}-release.apk"
+            if [[ ! -f "$APK" ]]; then
+              APK="android/app/build/outputs/apk/release/app-${ABI}-release-unsigned.apk"
             fi
-          fi
+            if [[ ! -f "$APK" ]]; then
+              echo "::error::No release APK was produced for ${ABI}."
+              exit 1
+            fi
+
+            cp "$APK" "dist/${NAME}-${ABI}.apk"
+            (
+              cd dist
+              sha256sum "${NAME}-${ABI}.apk" > "${NAME}-${ABI}.apk.sha256"
+            )
+
+            if [[ "${ANDROID_KEYSTORE_BASE64}" != "" ]]; then
+              APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+              if [[ -n "$APKSIGNER" ]]; then
+                "$APKSIGNER" verify --verbose "dist/${NAME}-${ABI}.apk"
+              fi
+            fi
+          done
 
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
-          echo "path=dist/${NAME}.apk" >> "$GITHUB_OUTPUT"
-          echo "checksum=dist/${NAME}.apk.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Upload the release artifact
         uses: actions/upload-artifact@v4
