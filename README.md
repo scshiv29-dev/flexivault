@@ -310,6 +310,13 @@ there is no Play Store or F-Droid listing.
 - Every push to `main` publishes the server image as `:edge` and uploads a
   debug APK as a CI artifact.
 
+To install the Android app and get updates automatically, add it to
+[Obtainium](https://github.com/ImranR98/Obtainium) with
+[this link](https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/scshiv29-dev/flexivault),
+or paste `https://github.com/scshiv29-dev/flexivault` into **Add App**. Turn on
+**Attempt to filter APKs by CPU architecture** in the app's settings there so it
+picks the right APK without asking.
+
 The release workflow needs four repository secrets for the signing key; without
 them a tagged release stops instead of publishing an unsigned APK. See
 [`docs/PUBLISHING.md`](docs/PUBLISHING.md) for keystore creation, secrets,

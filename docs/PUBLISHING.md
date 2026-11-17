@@ -207,6 +207,37 @@ Wait for the **Release** workflow. When it finishes:
 If the tag already exists, delete the remote tag and recreate it only after
 understanding that users may already have downloaded the old release.
 
+### Updates through Obtainium
+
+[Obtainium](https://github.com/ImranR98/Obtainium) installs and updates the APK
+straight from GitHub Releases, so publishing a tag is all it needs. Users add the
+app with this link (it opens Obtainium, or offers to install it):
+
+```text
+https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/scshiv29-dev/flexivault
+```
+
+or by pasting `https://github.com/scshiv29-dev/flexivault` into **Add App**.
+
+Obtainium relies on these release rules. Keep them when changing the workflow:
+
+- **Same signing key forever.** Android rejects an update signed with a
+  different key, so Obtainium cannot install it. Back up the release keystore.
+- **Tag matches `versionName`.** Obtainium compares the installed app's
+  `versionName` (`1.0.5`) with the release tag after dropping the `v`
+  (`v1.0.5`). The release workflow fails if the tag, `app.json` and
+  `android/app/build.gradle` disagree.
+- **ABI in the APK file name.** Each release has one APK per ABI, so the asset
+  names keep `arm64-v8a` / `armeabi-v7a`. With **Attempt to filter APKs by CPU
+  architecture** turned on in the app's Obtainium settings, Obtainium picks the
+  right APK by itself. Without it, Obtainium asks which APK to install on every
+  update, and background updates do not run.
+- **Only app APKs end in `.apk`.** Checksums (`.apk.sha256`) and the extension
+  zip are ignored, so do not attach other `.apk` files (such as a debug build)
+  to a release.
+- **No drafts or pre-releases for stable builds.** Obtainium skips pre-releases
+  unless the user opts in.
+
 ### Publish the extension to a browser store
 
 The release zip is ready to upload, but a store listing is **not** created by
@@ -280,6 +311,8 @@ docker buildx imagetools inspect \
 | Release workflow fails at “Require signing secrets” | Add all four Android signing secrets, then re-run the workflow. |
 | Release contains an unsigned APK | The keystore step was skipped. Do not distribute it; fix the secrets and rebuild. |
 | APK will not install over an older build | The signing keys differ. Uninstall the old app, or use the original keystore. |
+| Obtainium always shows an update for the installed version | The tag and the APK's `versionName` differ. Keep `app.json`, `build.gradle` and the tag in sync. |
+| Obtainium asks which APK to install | Turn on **Attempt to filter APKs by CPU architecture** for FlexiVault in Obtainium. |
 | `versionCode` already exists | Increment it in `app.json` and `android/app/build.gradle`, commit, and tag a new version. |
 | GHCR pull is denied | The package is private. Make it public or add registry credentials in Coolify. |
 | Coolify still runs the old server | `FLEXIVAULT_IMAGE_TAG` points at the old tag, or `latest` was not re-pulled. Re-pull/redeploy. |
