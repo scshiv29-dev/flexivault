@@ -13,9 +13,10 @@ Expo Go cannot exercise this feature. It needs a native APK built from
 
 - FlexiVault appears in **Settings → System → Languages & input → Autofill**
   (the exact menu varies by OEM) as an autofill service.
-- Browser forms are matched by the page's `webDomain`: an exact saved hostname
-  or a subdomain of it. A look-alike such as `example.com.evil.test` does not
-  match `example.com`. Browser pages never fall back to matching the browser's
+- Browser forms are matched by the page's `webDomain`: an exact saved hostname,
+  a subdomain of it, or another host on the same main domain (so `m.example.com`
+  matches a login saved from `www.example.com`). A look-alike such as
+  `example.com.evil.test` does not match `example.com`. Browser pages never fall back to matching the browser's
   own package name, even when a page does not expose a web domain.
 - Native Android forms are matched first by an explicit package name saved on
   the login, then by tokens from the app label and package name against the
@@ -372,9 +373,29 @@ must be refreshed when a browser's signing certificate or package entry changes.
 - Only `login` items with a non-empty password and a non-empty name are cached.
   Hosts and packages may both be empty; they are used for explicit matching and
   native-app inference.
-- Browser/website match: the target `webDomain` equals a saved host, or ends with
-  `.<saved host>`. Saved hosts have `www.` removed. Single-label hosts other than
-  `localhost` are ignored so an entry like `com` cannot match every `.com` site.
+- Browser/website match: the target `webDomain` equals a saved host (95), ends
+  with `.<saved host>` (90), or shares its main (registrable) domain (85).
+  Saved hosts have `www.` removed. Single-label hosts other than `localhost` are
+  ignored so an entry like `com` cannot match every `.com` site. The main domain
+  uses a built-in list of country second-level domains (`co.uk`, `com.au`, …)
+  and shared hosting suffixes (`github.io`, `herokuapp.com`, `blogspot.com`,
+  …), not the full Public Suffix List, so `alice.github.io` never matches
+  `bob.github.io`.
+- Native apps can report a `webDomain` too (a web view or embedded sign-in).
+  Any app can put any domain in its view tree, so an app's domain is used only
+  when the app owns it (`AutofillDomainTrust`):
+  - the app is the verified Android App Links handler for that host, its main
+    domain or `www.` + main domain (Android 12+; checked by resolving an
+    `https://` link to the app), or
+  - the app's package name sits under that main domain, for example
+    `com.reddit.frontpage` for `m.reddit.com` or `uk.co.bbc.news` for
+    `bbc.co.uk`.
+
+  Otherwise the domain is dropped and the app is matched by package and app
+  name only. The same rule applies to save requests, so an app cannot save a
+  login under a website it does not own. Android does not verify package
+  names, so the package rule is weaker than a verified link: an app could pick
+  a package such as `com.paypal.fake` to claim `paypal.com`.
 - Browser requests that do not expose a web domain return no datasets. Package
   inference is never used for a browser, because that would offer a login such as
   "Google" on every page.
@@ -394,6 +415,7 @@ must be refreshed when a browser's signing certificate or package entry changes.
   site no longer decides which logins are offered.
 - FlexiVault's own package is excluded.
 - Ranking: explicit package (100), exact host (95), parent-domain host (90),
+  same main domain (85),
   then inferred token overlap. When any login matches by package or host,
   token-inferred guesses are dropped from the list.
 - If the username field already has text (the user started typing, or typed it

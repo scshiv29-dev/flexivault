@@ -28,7 +28,11 @@ class FlexiVaultAutofillService : AutofillService() {
     try {
       val structure: AssistStructure =
         request.fillContexts.lastOrNull()?.structure ?: return callback.onSuccess(null)
-      val fields = AutofillParser.parse(structure) ?: return callback.onSuccess(null)
+      val parsed = AutofillParser.parse(structure) ?: return callback.onSuccess(null)
+      // A native app's web domain is only used when the app owns it.
+      val fields = parsed.copy(
+        webDomain = AutofillDomainTrust.trustedWebDomain(this, parsed.packageName, parsed.webDomain),
+      )
 
       if (fields.packageName == packageName) {
         return callback.onSuccess(null)
@@ -134,6 +138,8 @@ class FlexiVaultAutofillService : AutofillService() {
       }
 
       val isBrowser = AutofillMatcher.isBrowserPackage(targetPackage)
+      // Never save or match a website domain an app does not own.
+      webDomain = AutofillDomainTrust.trustedWebDomain(this, targetPackage, webDomain)
       if (isBrowser && webDomain.isNullOrBlank()) {
         callback.onSuccess()
         return

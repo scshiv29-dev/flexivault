@@ -297,4 +297,71 @@ class AutofillMatcherTest {
     )
     assertTrue(ranked.isEmpty())
   }
+
+  @Test
+  fun findsTheMainDomain() {
+    assertEquals("reddit.com", AutofillMatcher.mainDomain("m.reddit.com"))
+    assertEquals("reddit.com", AutofillMatcher.mainDomain("https://www.reddit.com/login"))
+    assertEquals("example.co.uk", AutofillMatcher.mainDomain("accounts.example.co.uk"))
+    assertEquals("example.com.au", AutofillMatcher.mainDomain("login.example.com.au"))
+    assertEquals(null, AutofillMatcher.mainDomain("co.uk"))
+    assertEquals("alice.github.io", AutofillMatcher.mainDomain("docs.alice.github.io"))
+    assertEquals(null, AutofillMatcher.mainDomain("github.io"))
+    assertEquals("localhost", AutofillMatcher.mainDomain("localhost"))
+    assertEquals("192.168.1.10", AutofillMatcher.mainDomain("192.168.1.10"))
+  }
+
+  @Test
+  fun relatesHostsOnTheSameMainDomain() {
+    assertEquals(3, AutofillMatcher.siteTier("reddit.com", "www.reddit.com"))
+    assertEquals(2, AutofillMatcher.siteTier("m.reddit.com", "reddit.com"))
+    assertEquals(1, AutofillMatcher.siteTier("app.reddit.com", "accounts.reddit.com"))
+    assertEquals(1, AutofillMatcher.siteTier("reddit.com", "accounts.reddit.com"))
+    assertEquals(0, AutofillMatcher.siteTier("alice.github.io", "bob.github.io"))
+    assertEquals(0, AutofillMatcher.siteTier("example.co.uk", "other.co.uk"))
+    assertEquals(0, AutofillMatcher.siteTier("reddit.com.evil.test", "reddit.com"))
+    assertEquals(0, AutofillMatcher.siteTier("evilreddit.com", "reddit.com"))
+  }
+
+  @Test
+  fun appWebViewOnAnotherSubdomainMatchesTheSavedSite() {
+    val target = AutofillMatcher.targetTokens("com.reddit.frontpage", "Reddit")
+    val saved = entry("web", name = "My account", hosts = listOf("accounts.reddit.com"))
+    assertEquals(
+      AutofillMatcher.DEFINITE_SCORE,
+      AutofillMatcher.score(saved, "m.reddit.com", "com.reddit.frontpage", target),
+    )
+    // A browser page on a sibling subdomain matches the same way.
+    assertEquals(
+      AutofillMatcher.DEFINITE_SCORE,
+      AutofillMatcher.score(saved, "www.reddit.com", "com.android.chrome", chromeTokens),
+    )
+  }
+
+  @Test
+  fun ranksExactThenParentThenMainDomain() {
+    val sibling = entry("sibling", hosts = listOf("accounts.example.com"))
+    val parent = entry("parent", hosts = listOf("example.com"))
+    val exact = entry("exact", hosts = listOf("app.example.com"))
+    val ranked = AutofillMatcher.rank(
+      listOf(sibling, parent, exact),
+      webDomain = "app.example.com",
+      packageName = "com.android.chrome",
+      targetTokens = chromeTokens,
+    )
+    assertEquals(listOf("exact", "parent", "sibling"), ranked.map { it.id })
+  }
+
+  @Test
+  fun appOwnsDomainsUnderItsPackageName() {
+    assertTrue(AutofillMatcher.packageOwnsDomain("com.reddit.frontpage", "m.reddit.com"))
+    assertTrue(AutofillMatcher.packageOwnsDomain("com.google.android.gm", "accounts.google.com"))
+    assertTrue(AutofillMatcher.packageOwnsDomain("uk.co.bbc.news", "account.bbc.co.uk"))
+    assertTrue(AutofillMatcher.packageOwnsDomain("io.github.alice.notes", "alice.github.io"))
+    assertFalse(AutofillMatcher.packageOwnsDomain("io.github.alice.notes", "bob.github.io"))
+    assertFalse(AutofillMatcher.packageOwnsDomain("com.evil.wallet", "paypal.com"))
+    assertFalse(AutofillMatcher.packageOwnsDomain("com.paypalhelper.app", "paypal.com"))
+    assertFalse(AutofillMatcher.packageOwnsDomain("co.uk.something", "example.co.uk"))
+    assertFalse(AutofillMatcher.packageOwnsDomain("com.example.app", null))
+  }
 }

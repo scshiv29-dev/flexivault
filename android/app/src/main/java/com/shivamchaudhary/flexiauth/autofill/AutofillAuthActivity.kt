@@ -318,11 +318,14 @@ class AutofillAuthActivity : FragmentActivity() {
     }
 
     // Re-check the browser target after the device prompt. A sync could have
-    // changed the item's hosts while the prompt was open.
+    // changed the item's hosts while the prompt was open. Native apps are
+    // re-checked by package (and, after an unlock, by matchingLogins), because
+    // a package-matched login need not list the app's web domain.
     val expectedHost = expectedWebDomain
     if (
       expectedHost != null &&
-      login.hosts.none { saved -> AutofillMatcher.hostMatches(expectedHost, saved) }
+      AutofillMatcher.isBrowserPackage(expectedPackage) &&
+      login.hosts.none { saved -> AutofillMatcher.siteMatches(expectedHost, saved) }
     ) {
       cancel()
       return
