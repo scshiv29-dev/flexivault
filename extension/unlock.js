@@ -17,7 +17,11 @@ import {
 } from "./src/quick-unlock.js";
 import { CACHE_KEY, CONFIG_KEY, isSessionFresh, local, session } from "./src/store.js";
 
-const mode = new URLSearchParams(location.search).get("mode") ?? "form";
+const params = new URLSearchParams(location.search);
+const mode = params.get("mode") ?? "form";
+// "Unlock with passkey" in the toolbar opens this window with method=passkey.
+// Start the prompt straight away so the user is not asked to choose twice.
+const autoPasskey = mode === "unlock" && params.get("method") === "passkey";
 const token = location.hash.slice(1);
 const $ = (id) => document.getElementById(id);
 const password = $("master-password");
@@ -207,6 +211,7 @@ try {
     setEnabled(true);
     if (!$("code-form").hidden) code.focus();
     else password.focus();
+    if (autoPasskey && !passkeyButton.hidden) void startPasskey();
   }
 } catch (error) {
   status.textContent = error.message;
@@ -232,12 +237,16 @@ $("code-form").addEventListener("submit", (event) => {
   });
 });
 
-passkeyButton.addEventListener("click", (event) => {
-  if (!event.isTrusted || passkeyButton.disabled) return;
-  void attempt("Waiting for passkey…", passkeyButton, async () => {
+function startPasskey() {
+  return attempt("Waiting for passkey…", passkeyButton, async () => {
     await handlers.passkey();
     done(success);
   });
+}
+
+passkeyButton.addEventListener("click", (event) => {
+  if (!event.isTrusted || passkeyButton.disabled) return;
+  void startPasskey();
 });
 
 async function cancel() {

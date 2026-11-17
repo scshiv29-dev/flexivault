@@ -947,21 +947,37 @@ function scheduleRequest(field, kind) {
   }, SUGGEST_DELAY_MS);
 }
 
-async function requestSuggestions(field, kind) {
+/** The username the user has typed so far: the field itself, or for a
+ * password field the username field of the same form. */
+function typedQuery(field, kind) {
+  if (kind !== "login") return "";
+  let source = field;
+  if (field instanceof HTMLInputElement && field.type === "password") {
+    source = findUsernameField(field);
+  }
+  if (!(source instanceof HTMLInputElement || source instanceof HTMLTextAreaElement)) return "";
+  if (source instanceof HTMLInputElement && source.type === "password") return "";
+  return String(source.value ?? "").trim().slice(0, 200);
+}
+
+async function requestSuggestions(field, kind, { refresh = false } = {}) {
   if (!isActiveInstance()) return;
-  if (filling || inlineUnlock) return;
+  if (filling || inlineUnlock || unlockOpening) return;
   if (!field?.isConnected || activeElementDeep() !== field) return;
   if (fieldKind(field) !== kind) return;
-  if (activeField === field && panel && !panel.hidden) return;
+  if (!refresh && activeField === field && panel && !panel.hidden) return;
   if (typeof chrome === "undefined" || typeof chrome.runtime?.sendMessage !== "function") {
     return;
   }
 
   activeField = field;
   activeKind = kind;
-  activeItems = [];
-  activeIndex = -1;
-  if (panel) panel.hidden = true;
+  // A refresh while typing keeps the current rows until the new ones arrive.
+  if (!refresh) {
+    activeItems = [];
+    activeIndex = -1;
+    if (panel) panel.hidden = true;
+  }
 
   const token = ++requestToken;
   let response;
@@ -969,6 +985,7 @@ async function requestSuggestions(field, kind) {
     response = await chrome.runtime.sendMessage({
       type: "flexivault:suggest",
       kind,
+      query: typedQuery(field, kind),
     });
   } catch {
     return;
@@ -983,7 +1000,16 @@ async function requestSuggestions(field, kind) {
     return;
   }
   if (!response?.ok || !response.items?.length) {
-    if (token === requestToken) closePanel();
+    if (token !== requestToken) return;
+    if (refresh && response?.ok) {
+      // Nothing matches what was typed. Hide the list but keep tracking the
+      // field, so deleting characters brings the suggestions back.
+      activeItems = [];
+      activeIndex = -1;
+      if (panel) panel.hidden = true;
+      return;
+    }
+    closePanel();
     return;
   }
 
@@ -1042,15 +1068,23 @@ function closeInlineUnlock(abort = true) {
   return current;
 }
 
+let unlockOpening = false;
+
 async function openInlineUnlock(field, kind) {
   closePanel();
+  // A second click or Enter while the window is still opening must not open
+  // another unlock window.
+  if (unlockOpening) return;
   closeInlineUnlock();
   const originalUrl = location.href;
   let result;
+  unlockOpening = true;
   try {
     result = await chrome.runtime.sendMessage({ type: "flexivault:unlock-open" });
   } catch {
     result = { ok: false, error: "FlexiVault is unavailable. Reload this page and try again." };
+  } finally {
+    unlockOpening = false;
   }
   if (!isActiveInstance() || !field.isConnected || location.href !== originalUrl) return;
   if (!result?.ok) {
@@ -1090,6 +1124,25 @@ document.addEventListener(
     bindSaveForm(closestComposed(found.field, "form"));
     if (found.field === activeField && panel && !panel.hidden) return;
     scheduleRequest(found.field, found.kind);
+  },
+  true
+);
+
+// Typing in the username field narrows the suggestions. Only a field the
+// user focused (which opened suggestions) is tracked, so FlexiVault's own fill
+// events and unrelated inputs do not reopen the list.
+let typingTimer = null;
+document.addEventListener(
+  "input",
+  (event) => {
+    if (!isActiveInstance() || filling || inlineUnlock) return;
+    const found = eligibleField(event);
+    if (!found || found.kind !== "login" || found.field !== activeField) return;
+    if (found.field instanceof HTMLInputElement && found.field.type === "password") return;
+    clearTimeout(typingTimer);
+    typingTimer = setTimeout(() => {
+      void requestSuggestions(found.field, "login", { refresh: true });
+    }, SUGGEST_DELAY_MS);
   },
   true
 );

@@ -94,6 +94,9 @@ const suggestionItems = {
   ],
 };
 let vaultLocked = false;
+const suggestQueries = [];
+// Many saved accounts on one site, used only by the typing-filter test.
+let manyAccounts = null;
 let unlockOpenRequests = 0;
 
 window.chrome = {
@@ -106,6 +109,19 @@ window.chrome = {
     },
     async sendMessage(message) {
       if (message.type === "flexivault:suggest") {
+        suggestQueries.push(message.query ?? "");
+        if (manyAccounts && message.kind === "login") {
+          // Mirror the worker: filter by the typed username, then cap at 6.
+          const query = String(message.query ?? "").toLowerCase();
+          return {
+            ok: true,
+            configured: true,
+            locked: false,
+            items: manyAccounts
+              .filter((item) => item.username.toLowerCase().includes(query))
+              .slice(0, 6),
+          };
+        }
         return {
           ok: true,
           configured: true,
@@ -219,6 +235,59 @@ assert.equal(fillRequests[0].id, "login_1");
 assert.equal(window.document.getElementById("email").value, "ada@example.com");
 assert.equal(window.document.getElementById("password").value, "s3cret-value");
 assert.equal(suggestionHost(), null, "the suggestion host is removed after selection");
+
+// Typing a username narrows the list instead of showing every account.
+{
+  manyAccounts = Array.from({ length: 120 }, (_, index) => ({
+    id: `acct_${index}`,
+    name: "Acme Portal",
+    username: `user${index}@acme.test`,
+  }));
+  const email = window.document.getElementById("email");
+  const password = window.document.getElementById("password");
+  email.value = "";
+  password.value = "";
+  const rowNames = () => Array.from(suggestionRoot.querySelectorAll(".row .sub"))
+    .map((node) => node.textContent);
+  const typeInto = async (field, value) => {
+    field.value = value;
+    field.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await wait(220);
+  };
+
+  await focusField(email);
+  assert.equal(suggestQueries.at(-1), "", "an empty field asks for every match");
+  assert.equal(rowNames().length, 6);
+
+  await typeInto(email, "user11");
+  assert.equal(suggestQueries.at(-1), "user11", "typing re-queries with the typed username");
+  assert.deepEqual(rowNames(), ["user11@acme.test", "user110@acme.test", "user111@acme.test",
+    "user112@acme.test", "user113@acme.test", "user114@acme.test"]);
+
+  await typeInto(email, "user117@");
+  assert.deepEqual(rowNames(), ["user117@acme.test"], "a longer prefix leaves one account");
+
+  await typeInto(email, "nobody@");
+  const panelNode = suggestionRoot.querySelector(".panel");
+  assert.ok(!panelNode || panelNode.hidden, "no match hides the list");
+
+  await typeInto(email, "user5");
+  assert.ok(suggestionRoot.querySelector(".panel") && !suggestionRoot.querySelector(".panel").hidden,
+    "editing the text brings matching suggestions back");
+  assert.ok(rowNames().every((name) => name.includes("user5")));
+
+  // The password field uses the username already typed in the same form.
+  email.value = "user42@acme.test";
+  email.blur();
+  await focusField(password);
+  assert.equal(suggestQueries.at(-1), "user42@acme.test");
+  assert.deepEqual(rowNames(), ["user42@acme.test"]);
+
+  password.blur();
+  email.value = "";
+  manyAccounts = null;
+  await wait(200);
+}
 
 // A one-time-code field gets a live code instead of a password.
 await focusField(window.document.getElementById("code"));

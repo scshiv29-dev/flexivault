@@ -488,20 +488,26 @@ try {
   assert.ok(!bodyText().includes("Welcome back."));
   pass("reopening the popup restores an unlocked vault from the session");
 
-  // A stale session should show the lock screen and retain the token.
+  // An idle session stays unlocked for the life of the browser session.
   const session = sessionArea.__get()["flexivault.session"];
   sessionArea.__set({
     "flexivault.session": {
       ...session,
-      lastActiveAt: Date.now() - 16 * 60 * 1000,
+      lastActiveAt: Date.now() - 16 * 60 * 60 * 1000,
     },
   });
-  await bootPopup("?phase=stale");
-  await waitFor(() => bodyText().includes("Welcome back."), "stale lock screen");
+  await bootPopup("?phase=idle");
+  await waitFor(() => bodyText().includes("Acme Portal"), "vault after long idle");
+  assert.ok(!bodyText().includes("Welcome back."));
+  pass("an idle session stays unlocked until the browser closes");
+
+  // A manual lock shows the lock screen and retains the token.
+  click('[data-action="lock"]');
+  await waitFor(() => bodyText().includes("Welcome back."), "manual lock screen");
   const staleSession = sessionArea.__get()["flexivault.session"];
-  assert.ok(staleSession?.token, "stale boot keeps the token for re-auth");
-  assert.ok(!staleSession?.encryptionKeyB64, "stale boot forgets the key");
-  pass("a boot after 15 idle minutes locks but keeps the token");
+  assert.ok(staleSession?.token, "manual lock keeps the token for re-auth");
+  assert.ok(!staleSession?.encryptionKeyB64, "manual lock forgets the key");
+  pass("locking manually forgets the key but keeps the token");
 
   click('[data-action="setup"]');
   await waitFor(

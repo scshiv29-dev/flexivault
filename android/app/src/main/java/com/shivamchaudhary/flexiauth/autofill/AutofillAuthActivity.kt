@@ -287,7 +287,9 @@ class AutofillAuthActivity : FragmentActivity() {
       id?.let {
         val logins = if (needsUnlock) {
           if (epoch != AutofillSession.epoch()) return@let null
-          vaultKey?.let { key -> matchingLogins(key) } ?: emptyList()
+          // Verifies the chosen login still matches this target. The typed-text
+          // filter and the list cap are only for building the picker.
+          vaultKey?.let { key -> matchingLogins(key, narrow = false) } ?: emptyList()
         } else {
           if (!AutofillSession.isUnlocked()) return@let null
           AutofillPendingStore.apply(this, AutofillCache.read(this))
@@ -316,11 +318,14 @@ class AutofillAuthActivity : FragmentActivity() {
     }
 
     // Re-check the browser target after the device prompt. A sync could have
-    // changed the item's hosts while the prompt was open.
+    // changed the item's hosts while the prompt was open. Native apps are
+    // re-checked by package (and, after an unlock, by matchingLogins), because
+    // a package-matched login need not list the app's web domain.
     val expectedHost = expectedWebDomain
     if (
       expectedHost != null &&
-      login.hosts.none { saved -> AutofillMatcher.hostMatches(expectedHost, saved) }
+      AutofillMatcher.isBrowserPackage(expectedPackage) &&
+      login.hosts.none { saved -> AutofillMatcher.siteMatches(expectedHost, saved) }
     ) {
       cancel()
       return
@@ -348,7 +353,7 @@ class AutofillAuthActivity : FragmentActivity() {
     }
   }
 
-  private fun matchingLogins(key: ByteArray): List<AutofillLogin> {
+  private fun matchingLogins(key: ByteArray, narrow: Boolean = true): List<AutofillLogin> {
     check(deviceAuthenticated && epoch == AutofillSession.epoch()) { "Unlock was cancelled." }
     val fields = assistFields()
     val targetPackage = expectedPackage ?: fields?.packageName
@@ -367,9 +372,14 @@ class AutofillAuthActivity : FragmentActivity() {
       packageManager.getApplicationLabel(packageManager.getApplicationInfo(targetPackage, 0)).toString()
     } catch (_: Exception) { null }
     val tokens = AutofillMatcher.targetTokens(targetPackage, appLabel)
-    return AutofillPendingStore.apply(this, AutofillVaultReader.readLogins(this, key))
-      .map { it to AutofillMatcher.score(it, expectedWebDomain, targetPackage, tokens) }
-      .filter { it.second > 0 }.sortedByDescending { it.second }.take(8).map { it.first }
+    return AutofillMatcher.rank(
+      AutofillPendingStore.apply(this, AutofillVaultReader.readLogins(this, key)),
+      expectedWebDomain,
+      targetPackage,
+      tokens,
+      typed = if (narrow) fields?.typedUsername else null,
+      limit = if (narrow) AutofillMatcher.MAX_DATASETS else Int.MAX_VALUE,
+    )
   }
 
   private fun showMasterPassword(notice: String? = null) {
