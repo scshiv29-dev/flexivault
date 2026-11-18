@@ -36,7 +36,8 @@ async function walk(directory) {
 const jsFiles = (await walk(".")).filter(
   (file) =>
     (file.endsWith(".js") || file.endsWith(".cjs")) &&
-    !file.startsWith("node_modules")
+    !file.startsWith("node_modules") &&
+    !file.startsWith("dist/")
 );
 
 for (const file of jsFiles) {
@@ -123,6 +124,41 @@ if (!csp.includes("script-src 'self'")) errors.push("CSP must restrict scripts t
 const permissions = new Set(manifest.permissions ?? []);
 for (const required of ["storage", "activeTab", "clipboardWrite"]) {
   if (!permissions.has(required)) errors.push(`missing permission ${required}`);
+}
+
+// The Firefox build reuses this manifest with an event-page background and
+// Gecko settings for the self-hosted (unlisted) update channel.
+{
+  const { firefoxManifest, GECKO_ID, PACKAGE_FILES, updatesManifest } = await import(
+    "./build-firefox.mjs"
+  );
+  const firefox = firefoxManifest(manifest, {
+    updateUrl: "https://example.test/firefox-updates.json",
+  });
+  assert.deepEqual(firefox.background, { scripts: ["background.js"], type: "module" });
+  assert.equal(firefox.minimum_chrome_version, undefined);
+  assert.equal(firefox.version, manifest.version);
+  assert.equal(firefox.browser_specific_settings.gecko.id, GECKO_ID);
+  assert.equal(
+    firefox.browser_specific_settings.gecko.update_url,
+    "https://example.test/firefox-updates.json"
+  );
+  assert.equal(manifest.background.service_worker, "background.js", "the Chrome manifest is not modified");
+  for (const entry of PACKAGE_FILES) {
+    try {
+      await stat(path.join(root, entry));
+    } catch {
+      errors.push(`Firefox package lists missing ${entry}`);
+    }
+  }
+  const updates = updatesManifest({
+    version: manifest.version,
+    updateLink: "https://example.test/a.xpi",
+    sha256: "ab",
+  });
+  const [entry] = updates.addons[GECKO_ID].updates;
+  assert.equal(entry.version, manifest.version);
+  assert.equal(entry.update_hash, "sha256:ab");
 }
 
 if (errors.length > 0) {
