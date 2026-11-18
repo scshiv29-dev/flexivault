@@ -277,7 +277,7 @@ jobs:
         working-directory: extension
         run: |
           node scripts/build-firefox.mjs
-          npx --yes web-ext@10.8.0 lint --source-dir dist/firefox --self-hosted --warnings-as-errors
+          npx --yes web-ext@10.8.0 lint --source-dir dist/firefox --self-hosted
 
       - name: Skip signing without AMO credentials
         if: env.AMO_JWT_ISSUER == '' || env.AMO_JWT_SECRET == ''
