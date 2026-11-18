@@ -248,9 +248,59 @@ notes with a working demo account, and manual review. Follow
 draft privacy policy is [`docs/EXTENSION-PRIVACY.md`](EXTENSION-PRIVACY.md); host
 it at a public URL before submitting.
 
-Firefox is not supported yet: the extension uses Chromium's
-`background.service_worker` and `chrome.*` APIs. Do not upload this zip to AMO
-until a Firefox port has been tested.
+### Firefox: self-hosted updates (unlisted XPI)
+
+Firefox lets an add-on update from your own server, the way Obtainium updates
+the APK, as long as addons.mozilla.org (AMO) signs it. An **unlisted** add-on is
+signed automatically (usually within minutes) and never appears in the AMO
+store.
+
+`extension/scripts/build-firefox.mjs` builds `extension/dist/firefox` from the
+same code. Its manifest differs from the Chrome one in three ways:
+
+- `background.scripts` (an event page) replaces `background.service_worker`.
+- `browser_specific_settings.gecko` sets the add-on ID
+  `flexivault@scshiv29-dev.github.io` and Firefox 140 as the minimum version.
+  **Never change the ID.** Firefox treats a new ID as a different add-on, and
+  installed copies stop updating.
+- `update_url` points at
+  `https://github.com/scshiv29-dev/flexivault/releases/latest/download/firefox-updates.json`.
+
+One-time setup:
+
+1. Sign in at <https://addons.mozilla.org/developers/> and accept the
+   developer agreement.
+2. Open **Tools → Manage API Keys** and generate credentials.
+3. Add them as repository secrets: `AMO_JWT_ISSUER` (the JWT issuer, which looks
+   like `user:12345:678`) and `AMO_JWT_SECRET`.
+
+On every `v*` tag, the release workflow's **Sign the Firefox extension** job:
+
+1. Builds and lints the add-on.
+2. Signs it on AMO through the unlisted channel.
+3. Attaches `FlexiVault-Firefox-<version>.xpi`, its `.sha256` and
+   `firefox-updates.json` to the release.
+
+Without the secrets, the job only builds and lints the add-on, then prints a
+warning. Firefox checks `update_url` about once a day and installs the new
+version. Users can also run **Check for Updates** from `about:addons`.
+
+Rules this depends on:
+
+- **Every release needs a new version.** AMO signs each version only once.
+- **Keep `firefox-updates.json` on the latest release.** `update_url` resolves
+  through `releases/latest`, so it must not be a draft or a pre-release, and
+  each stable release must include the file.
+- **First install:** users open the `.xpi` link from the release page in Firefox
+  and accept the prompt. Firefox needs to be 140 or newer (the current ESR
+  qualifies).
+- **Passkey quick unlock** may not work in Firefox, because WebAuthn from
+  `moz-extension://` pages is limited. The master password and authenticator
+  code unlock do not depend on it.
+
+Before the first signed release, load `extension/dist/firefox/manifest.json`
+from `about:debugging#/runtime/this-firefox` (**Load Temporary Add-on**). Check
+unlock, sync, autofill and the save prompt.
 
 ## 7. Self-host with Coolify
 

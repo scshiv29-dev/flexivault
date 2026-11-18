@@ -45,6 +45,12 @@ jobs:
           npm run check
           npm test
 
+      - name: Build and lint the Firefox extension
+        working-directory: extension
+        run: |
+          node scripts/build-firefox.mjs
+          npx --yes web-ext@10.8.0 lint --source-dir dist/firefox --self-hosted --warnings-as-errors
+
   android:
     name: Android debug build
     runs-on: ubuntu-latest

@@ -257,6 +257,76 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
 
+  firefox:
+    name: Sign the Firefox extension
+    needs: android
+    runs-on: ubuntu-latest
+    env:
+      AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+      AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build and lint the Firefox extension
+        working-directory: extension
+        run: |
+          node scripts/build-firefox.mjs
+          npx --yes web-ext@10.8.0 lint --source-dir dist/firefox --self-hosted --warnings-as-errors
+
+      - name: Skip signing without AMO credentials
+        if: env.AMO_JWT_ISSUER == '' || env.AMO_JWT_SECRET == ''
+        run: |
+          echo "::warning::AMO_JWT_ISSUER and AMO_JWT_SECRET are not set, so no signed Firefox XPI was published. See docs/PUBLISHING.md."
+
+      # Unlisted add-ons are signed by addons.mozilla.org but not listed there.
+      # Firefox updates them from the manifest's update_url, which points at
+      # firefox-updates.json on the latest GitHub release.
+      - name: Sign the XPI on addons.mozilla.org (unlisted)
+        if: startsWith(github.ref, 'refs/tags/v') && env.AMO_JWT_ISSUER != '' && env.AMO_JWT_SECRET != ''
+        working-directory: extension
+        run: |
+          npx --yes web-ext@10.8.0 sign \
+            --channel unlisted \
+            --source-dir dist/firefox \
+            --artifacts-dir dist/firefox-signed \
+            --api-key "$AMO_JWT_ISSUER" \
+            --api-secret "$AMO_JWT_SECRET" \
+            --approval-timeout 1800000
+
+      - name: Write the XPI and firefox-updates.json
+        if: startsWith(github.ref, 'refs/tags/v') && env.AMO_JWT_ISSUER != '' && env.AMO_JWT_SECRET != ''
+        run: |
+          VERSION=$(node -p "require('./extension/manifest.json').version")
+          if [[ "$GITHUB_REF_NAME" != "v${VERSION}" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match extension/manifest.json version ${VERSION}."
+            exit 1
+          fi
+          NAME="FlexiVault-Firefox-${VERSION}.xpi"
+          SIGNED=$(ls extension/dist/firefox-signed/*.xpi 2>/dev/null | head -1)
+          if [[ -z "$SIGNED" ]]; then
+            echo "::error::web-ext sign produced no XPI."
+            exit 1
+          fi
+          mkdir -p dist
+          cp "$SIGNED" "dist/${NAME}"
+          (cd dist && sha256sum "${NAME}" > "${NAME}.sha256")
+          node extension/scripts/build-firefox.mjs --updates "dist/${NAME}" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${NAME}" \
+            dist/firefox-updates.json
+          cat dist/firefox-updates.json
+
+      - name: Publish the Firefox XPI to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v') && env.AMO_JWT_ISSUER != '' && env.AMO_JWT_SECRET != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+
   server-image:
     name: Publish the server image
     needs: verify

@@ -288,6 +288,10 @@ persistent volume, environment variables and backups.
 3. Connect with the same server URL, email and master password. Create the
    server account in the mobile app first if it does not exist.
 
+Firefox (140+): install `FlexiVault-Firefox-<version>.xpi` from the latest
+release. It is signed by Mozilla and updates itself from GitHub Releases. See
+[Firefox: self-hosted updates](docs/PUBLISHING.md#firefox-self-hosted-updates-unlisted-xpi).
+
 See [`extension/README.md`](extension/README.md) for the permission model and
 security notes, and [`extension/STORE.md`](extension/STORE.md) for the Chrome
 Web Store / Edge Add-ons package and review checklist. The store listing is
