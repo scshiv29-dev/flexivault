@@ -1,4 +1,4 @@
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Keyboard, View } from "react-native";
 
@@ -8,6 +8,7 @@ import { Button, LinkButton } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
 import { Field } from "@/components/ui/Field";
 import { useToast } from "@/components/ui/Toast";
+import { hasNativeQrScanner, scanConnectCode } from "@/lib/native/qr-scanner";
 import { useVault } from "@/lib/state/vault-provider";
 import { useAppTheme } from "@/lib/theme";
 import { ApiError, api, normalizeServerUrl } from "@/lib/vault/api";
@@ -17,9 +18,12 @@ export default function ConnectScreen() {
   const router = useRouter();
   const toast = useToast();
   const { connectServer } = useVault();
+  // Pre-filled when opened from a flexivault://connect link.
+  const params = useLocalSearchParams<{ server?: string; email?: string }>();
+  const scannerAvailable = hasNativeQrScanner();
 
-  const [serverUrl, setServerUrl] = useState("");
-  const [email, setEmail] = useState("");
+  const [serverUrl, setServerUrl] = useState(typeof params.server === "string" ? params.server : "");
+  const [email, setEmail] = useState(typeof params.email === "string" ? params.email : "");
   const [password, setPassword] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [needsTotp, setNeedsTotp] = useState(false);
@@ -27,6 +31,30 @@ export default function ConnectScreen() {
   const [testing, setTesting] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [scanning, setScanning] = useState(false);
+
+  const scan = async () => {
+    Keyboard.dismiss();
+    setScanning(true);
+    setError(null);
+    try {
+      const link = await scanConnectCode();
+      if (!link) return;
+      setServerUrl(link.server);
+      if (link.email) setEmail(link.email);
+      setServerName(null);
+      setNotFound(false);
+      toast.show(
+        link.email ? "Server and email filled in" : "Server address filled in",
+        "success"
+      );
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setScanning(false);
+    }
+  };
 
   const test = async () => {
     if (!serverUrl) return;
@@ -49,6 +77,7 @@ export default function ConnectScreen() {
     Keyboard.dismiss();
     setLoading(true);
     setError(null);
+    setNotFound(false);
     try {
       await connectServer({
         url: serverUrl,
@@ -64,6 +93,11 @@ export default function ConnectScreen() {
           setNeedsTotp(true);
         }
         setError(caught.message);
+      } else if ((caught as { code?: string }).code === "account_not_found") {
+        setNotFound(true);
+        setError(
+          "No account for this email on that server yet. Create a vault on this phone first, then join the server from Settings → Server."
+        );
       } else {
         setError((caught as Error).message);
       }
@@ -81,7 +115,18 @@ export default function ConnectScreen() {
         own. The master password unlocks it locally.
       </AppText>
 
-      <View style={{ marginTop: 24, gap: 16 }}>
+      {scannerAvailable ? (
+        <Button
+          label="Scan QR code"
+          icon="maximize"
+          variant="soft"
+          onPress={scan}
+          loading={scanning}
+          style={{ marginTop: 20 }}
+        />
+      ) : null}
+
+      <View style={{ marginTop: scannerAvailable ? 18 : 24, gap: 16 }}>
         <Field
           label="SERVER URL"
           value={serverUrl}
@@ -108,7 +153,9 @@ export default function ConnectScreen() {
           hint={
             serverName
               ? `Reached ${serverName}. Ready when you are.`
-              : "http:// is assumed for local addresses."
+              : scannerAvailable
+                ? "Or scan the QR code on your server's /connect page."
+                : "http:// is assumed for local addresses."
           }
         />
 
@@ -159,7 +206,7 @@ export default function ConnectScreen() {
       </View>
 
       {error ? (
-        <Callout tone="danger" body={error} style={{ marginTop: 16 }} />
+        <Callout tone={notFound ? "warning" : "danger"} body={error} style={{ marginTop: 16 }} />
       ) : (
         <Callout
           tone="info"

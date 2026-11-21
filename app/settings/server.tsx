@@ -1,5 +1,5 @@
 import Feather from "@expo/vector-icons/Feather";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Keyboard, Pressable, View } from "react-native";
 
@@ -7,16 +7,20 @@ import { AppText } from "@/components/ui/AppText";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
 import { Card, Divider } from "@/components/ui/Card";
+import { ChipRow } from "@/components/ui/ChipRow";
 import { Field } from "@/components/ui/Field";
 import { IconTile } from "@/components/ui/IconTile";
 import { PageHeader, SectionHeader } from "@/components/ui/PageHeader";
+import { QrCode } from "@/components/ui/QrCode";
 import { Screen } from "@/components/ui/Screen";
 import { Sheet } from "@/components/ui/Sheet";
 import { useToast } from "@/components/ui/Toast";
 import { relativeTime, serverHost } from "@/lib/format";
+import { hasNativeQrScanner, scanConnectCode } from "@/lib/native/qr-scanner";
 import { useVault } from "@/lib/state/vault-provider";
 import { useAppTheme } from "@/lib/theme";
 import { ApiError, api, normalizeServerUrl, type ServerInfo } from "@/lib/vault/api";
+import { buildConnectLink } from "@/lib/vault/connect-link";
 
 function isErrorCode(error: unknown, code: string): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: string }).code === code);
@@ -36,9 +40,20 @@ export default function ServerSettingsScreen() {
     syncNow,
     refreshServerProfile,
   } = useVault();
+  // Pre-filled when opened from a flexivault://connect link.
+  const params = useLocalSearchParams<{ server?: string; email?: string; invite?: string }>();
+  const param = (value: unknown) => (typeof value === "string" && value ? value : undefined);
+  const scannerAvailable = hasNativeQrScanner();
 
-  const [url, setUrl] = useState(session?.url ?? "");
-  const [email, setEmail] = useState(session?.email ?? "");
+  const [url, setUrl] = useState(param(params.server) ?? session?.url ?? "");
+  const [email, setEmail] = useState(
+    param(params.email) ?? (param(params.server) ? "" : session?.email ?? "")
+  );
+  const [invite, setInvite] = useState(param(params.invite) ?? "");
+  const [needsInvite, setNeedsInvite] = useState(Boolean(param(params.invite)));
+  const [scanning, setScanning] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareWho, setShareWho] = useState<"me" | "other">("me");
   const [password, setPassword] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [needsTotp, setNeedsTotp] = useState(false);
@@ -57,6 +72,35 @@ export default function ServerSettingsScreen() {
     setSaltMismatch(false);
   };
 
+  const scan = async () => {
+    Keyboard.dismiss();
+    setScanning(true);
+    resetMessages();
+    try {
+      const link = await scanConnectCode();
+      if (!link) return;
+      setUrl(link.server);
+      setEmail(link.email ?? "");
+      if (link.invite) {
+        setInvite(link.invite);
+        setNeedsInvite(true);
+      }
+      setInfo(null);
+      toast.show("Server details filled in", "success");
+      api
+        .serverInfo(link.server)
+        .then((result) => {
+          setInfo(result);
+          if (result.inviteRequired) setNeedsInvite(true);
+        })
+        .catch(() => {});
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setScanning(false);
+    }
+  };
+
   const test = async () => {
     if (!url.trim()) return;
     Keyboard.dismiss();
@@ -66,7 +110,10 @@ export default function ServerSettingsScreen() {
     try {
       const result = await api.serverInfo(normalizeServerUrl(url));
       setInfo(result);
-      if (!result.registrationOpen) {
+      if (result.inviteRequired) setNeedsInvite(true);
+      if (result.inviteRequired) {
+        toast.show("Server found — new accounts need an invite code", "default");
+      } else if (!result.registrationOpen) {
         toast.show("Server found — registration is closed", "default");
       } else {
         toast.show(`Connected to ${result.name}`, "success");
@@ -91,6 +138,7 @@ export default function ServerSettingsScreen() {
         email,
         password,
         totpCode: totpCode.trim() || undefined,
+        inviteCode: invite.trim() || undefined,
         createIfMissing: !session && !replaceLocal,
         replaceLocal,
       });
@@ -109,6 +157,9 @@ export default function ServerSettingsScreen() {
       if (caught instanceof ApiError) {
         if (caught.code === "totp_required" || caught.code === "invalid_totp") {
           setNeedsTotp(true);
+        }
+        if (caught.code === "invite_required" || caught.code === "invalid_invite") {
+          setNeedsInvite(true);
         }
         setError(caught.message);
       } else if (isErrorCode(caught, "salt_mismatch")) {
@@ -244,6 +295,18 @@ export default function ServerSettingsScreen() {
 
           <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
             <Button
+              label="Show QR code"
+              icon="maximize"
+              variant="secondary"
+              size="sm"
+              fullWidth={false}
+              onPress={() => {
+                setShareWho("me");
+                setShareOpen(true);
+              }}
+              style={{ flex: 1 }}
+            />
+            <Button
               label="Server two-factor"
               icon="shield"
               variant="secondary"
@@ -263,6 +326,17 @@ export default function ServerSettingsScreen() {
       )}
 
       <SectionHeader title={session ? "Use another account" : "Server details"} />
+
+      {scannerAvailable ? (
+        <Button
+          label="Scan QR code"
+          icon="maximize"
+          variant="soft"
+          onPress={scan}
+          loading={scanning}
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
 
       <View style={{ gap: 16 }}>
         <Field
@@ -297,7 +371,7 @@ export default function ServerSettingsScreen() {
           hint={
             info
               ? `${info.name} · v${info.version} · registration ${
-                  info.registrationOpen ? "open" : "closed"
+                  info.registrationOpen ? "open" : info.inviteRequired ? "by invite" : "closed"
                 }`
               : "http:// is assumed for local addresses."
           }
@@ -339,6 +413,21 @@ export default function ServerSettingsScreen() {
               : "If the server has no account for this email, one is created with this vault's password."
           }
         />
+
+        {needsInvite && !session ? (
+          <Field
+            label="INVITE CODE"
+            value={invite}
+            onChangeText={(value) => {
+              setInvite(value);
+              resetMessages();
+            }}
+            placeholder="From the server owner"
+            icon="key"
+            autoComplete="off"
+            hint="Only needed the first time, to create your account on this server."
+          />
+        ) : null}
 
         {needsTotp ? (
           <Field
@@ -492,6 +581,48 @@ export default function ServerSettingsScreen() {
           ) : null}
         </View>
       </Sheet>
+
+      {session ? (
+        <Sheet
+          visible={shareOpen}
+          onClose={() => setShareOpen(false)}
+          title="Connect another phone"
+          subtitle="Scan this from FlexiVault on the other phone: Sign in to a server → Scan QR code."
+          footer={<Button label="Done" variant="ghost" onPress={() => setShareOpen(false)} />}
+        >
+          <View style={{ gap: 14 }}>
+            <ChipRow
+              options={[
+                { key: "me", label: "My account", icon: "user" },
+                { key: "other", label: "Someone else", icon: "user-plus" },
+              ]}
+              value={shareWho}
+              onChange={(key) => setShareWho(key as "me" | "other")}
+            />
+            <View style={{ alignItems: "center" }}>
+              <QrCode
+                value={buildConnectLink({
+                  server: session.url,
+                  email: shareWho === "me" ? session.email : undefined,
+                })}
+                size={240}
+              />
+            </View>
+            <AppText variant="small" style={{ textAlign: "center" }}>
+              {serverHost(session.url)}
+              {shareWho === "me" ? ` · ${session.email}` : ""}
+            </AppText>
+            <Callout
+              tone="info"
+              body={
+                shareWho === "me"
+                  ? "The code fills in the server and your email. Your master password is never in it — type it on the other phone."
+                  : "The code fills in only the server address. The other person signs in with their own email and master password, or creates a new account."
+              }
+            />
+          </View>
+        </Sheet>
+      ) : null}
 
       <Sheet
         visible={disconnectOpen}

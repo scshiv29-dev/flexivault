@@ -42,6 +42,8 @@ services:
       DATA_DIR: "/data"
       SERVER_NAME: "${SERVER_NAME:-FlexiVault}"
       REGISTRATION_OPEN: "${REGISTRATION_OPEN:-true}"
+      INVITE_CODES: "${INVITE_CODES:-}"
+      PUBLIC_URL: "${PUBLIC_URL:-}"
       # "*" is quoted so the value remains a string if Coolify renders the
       # environment without Compose interpolation.
       CORS_ORIGINS: "${CORS_ORIGINS:-*}"

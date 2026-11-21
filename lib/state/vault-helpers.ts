@@ -54,6 +54,8 @@ export interface ConnectServerInput {
   email: string;
   password: string;
   totpCode?: string;
+  /** Needed to create an account when the server only accepts invites. */
+  inviteCode?: string;
   createIfMissing?: boolean;
   replaceLocal?: boolean;
   fresh?: boolean;

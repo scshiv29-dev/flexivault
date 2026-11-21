@@ -106,6 +106,8 @@ export interface ServerInfo {
   name: string;
   version: string;
   registrationOpen: boolean;
+  /** Registration is closed but an invite code lets someone join. */
+  inviteRequired?: boolean;
   maxItems: number;
   serverTime: string;
 }
@@ -153,6 +155,7 @@ export const api = {
       authHash: string;
       kdfSalt: string;
       kdfIterations: number;
+      inviteCode?: string;
     }
   ) {
     return request<AuthResponse>(baseUrl, "/api/accounts/register", {

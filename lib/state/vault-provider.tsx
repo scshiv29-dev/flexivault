@@ -976,6 +976,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           authHash: derived.authHash,
           kdfSalt: salt,
           kdfIterations: iterations,
+          inviteCode: input.inviteCode?.trim() || undefined,
         });
 
         const nextSession: ServerSession = {
