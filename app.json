@@ -2,7 +2,7 @@
   "expo": {
     "name": "FlexiVault",
     "slug": "flexiauth",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "flexivault",
@@ -17,7 +17,7 @@
         "backgroundColor": "#070C0A"
       },
       "package": "com.shivamchaudhary.flexiauth",
-      "versionCode": 7
+      "versionCode": 8
     },
     "web": {
       "bundler": "metro",
