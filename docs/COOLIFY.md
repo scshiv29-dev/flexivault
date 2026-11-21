@@ -80,6 +80,8 @@ Set:
 | `FLEXIVAULT_IMAGE_TAG` | `v1.0.0` for production, or `latest` / `edge` |
 | `SERVER_NAME` | `FlexiVault` |
 | `REGISTRATION_OPEN` | `true` until your first account exists |
+| `INVITE_CODES` | optional; codes that let family/friends join while registration is closed |
+| `PUBLIC_URL` | `https://vault.example.com` (your Coolify domain), used by the `/connect` QR page |
 | `CORS_ORIGINS` | `*` for the mobile app and extension |
 | `TOKEN_TTL_SECONDS` | `2592000` (30 days) |
 | `MAX_VAULT_BYTES` | `8388608` (8 MiB) |
@@ -97,6 +99,11 @@ losing `ENCRYPTION_SECRET` makes stored server-side TOTP secrets unreadable;
 losing `JWT_SECRET` signs users out.
 
 After the first account is created, set `REGISTRATION_OPEN=false` and redeploy.
+To add more people later, set `INVITE_CODES` instead of reopening sign-up.
+
+Open `https://vault.example.com/connect` to get a QR code that the app scans
+to fill in the server address (see the server README, *Connect phones with a
+QR code*).
 
 ## 4. Assign the domain
 

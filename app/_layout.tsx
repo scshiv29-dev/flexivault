@@ -1,5 +1,11 @@
 import { useFonts } from "expo-font";
-import { Stack, useRootNavigationState, useRouter, useSegments } from "expo-router";
+import {
+  Stack,
+  useGlobalSearchParams,
+  useRootNavigationState,
+  useRouter,
+  useSegments,
+} from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar, type StatusBarStyle } from "expo-status-bar";
 import { useEffect } from "react";
@@ -19,6 +25,7 @@ function RootNavigator() {
   const segments = useSegments() as string[];
   const router = useRouter();
   const navigationState = useRootNavigationState();
+  const linkParams = useGlobalSearchParams<{ server?: string; email?: string; invite?: string }>();
 
   useEffect(() => {
     if (!navigationState?.key) return;
@@ -44,8 +51,20 @@ function RootNavigator() {
 
     if (status === "unlocked" && inAuth) {
       router.replace("/(tabs)");
+      // A flexivault://connect link opened on a phone that already has a
+      // vault: take the details to Settings → Server instead of dropping them.
+      if (screen === "connect" && typeof linkParams.server === "string" && linkParams.server) {
+        router.push({
+          pathname: "/settings/server",
+          params: {
+            server: linkParams.server,
+            email: typeof linkParams.email === "string" ? linkParams.email : "",
+            invite: typeof linkParams.invite === "string" ? linkParams.invite : "",
+          },
+        });
+      }
     }
-  }, [status, segments, navigationState?.key, router]);
+  }, [status, segments, navigationState?.key, router, linkParams.server, linkParams.email, linkParams.invite]);
 
   if (status === "loading") return <BootSplash />;
 

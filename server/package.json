@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node --experimental-sqlite src/index.js",
     "dev": "node --watch --experimental-sqlite src/index.js",
+    "users": "node --experimental-sqlite --no-warnings src/admin.js",
     "test": "node --experimental-sqlite --test test/*.test.js"
   }
 }

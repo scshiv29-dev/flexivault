@@ -1,5 +1,7 @@
 import { NativeModules, Platform } from "react-native";
 
+import { parseConnectLink, type ConnectLink } from "@/lib/vault/connect-link";
+
 interface NativeQrScannerModule {
   scan(): Promise<string | null>;
   decodeImage?(uri: string): Promise<string>;
@@ -89,4 +91,18 @@ export async function decodeQrImage(uri: string): Promise<string> {
   } finally {
     bitmap?.close?.();
   }
+}
+
+/**
+ * Scans a server connect code (from the server's /connect page or another
+ * signed-in phone). Resolves null when the user cancels.
+ */
+export async function scanConnectCode(): Promise<ConnectLink | null> {
+  const raw = await scanQrCode();
+  if (!raw) return null;
+  const link = parseConnectLink(raw);
+  if (!link) {
+    throw new Error("That QR code is not a FlexiVault server code.");
+  }
+  return link;
 }

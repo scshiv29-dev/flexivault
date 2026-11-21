@@ -13,6 +13,7 @@ import {
   signToken,
   verifyToken,
 } from "./crypto.js";
+import { renderConnectPage } from "./connect-page.js";
 import { generateTotpSecret, matchTotpStep, otpauthUrl, verifyTotp } from "./totp.js";
 
 const JSON_LIMIT_DEFAULT = 8 * 1024 * 1024;
@@ -41,6 +42,34 @@ function json(res, status, payload) {
     "Cache-Control": "no-store",
   });
   res.end(body);
+}
+
+function html(res, status, body) {
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": Buffer.byteLength(body),
+    "Cache-Control": "no-store",
+    "Content-Security-Policy":
+      "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  });
+  res.end(body);
+}
+
+/** Address clients should use, as seen from outside any reverse proxy. */
+function publicBaseUrl(req, config) {
+  if (config.publicUrl) return config.publicUrl;
+  const first = (value) => (typeof value === "string" ? value.split(",")[0].trim() : "");
+  let proto = req.socket.encrypted ? "https" : "http";
+  let host = req.headers.host ?? "localhost";
+  if (config.trustProxy) {
+    proto = first(req.headers["x-forwarded-proto"]) || proto;
+    host = first(req.headers["x-forwarded-host"]) || host;
+  }
+  if (!/^https?$/.test(proto) || !/^[A-Za-z0-9.\-:[\]]+$/.test(host)) {
+    proto = "http";
+    host = "localhost";
+  }
+  return `${proto}://${host}`;
 }
 
 function normaliseEmail(value) {
@@ -278,11 +307,31 @@ export function createApp(overrides = {}) {
       return;
     }
 
+    if (method === "GET" && (pathname === "/" || pathname === "/connect")) {
+      if (!config.connectPage) throw new HttpError(404, "Not found", "not_found");
+      rateLimit(`connect-page:${ip}`, 120, 15 * 60 * 1000);
+      const param = (name, max) => String(parsedUrl.searchParams.get(name) ?? "").trim().slice(0, max);
+      html(
+        res,
+        200,
+        renderConnectPage({
+          serverName: config.serverName,
+          serverUrl: publicBaseUrl(req, config),
+          email: normaliseEmail(param("email", 320)),
+          invite: param("invite", 128),
+          registrationOpen: config.registrationOpen,
+          inviteRequired: !config.registrationOpen && config.inviteCodes.length > 0,
+        })
+      );
+      return;
+    }
+
     if (method === "GET" && pathname === "/api/server-info") {
       json(res, 200, {
         name: config.serverName,
         version: "1.0.0",
         registrationOpen: config.registrationOpen,
+        inviteRequired: !config.registrationOpen && config.inviteCodes.length > 0,
         maxItems: config.maxItems,
         serverTime: new Date().toISOString(),
       });
@@ -291,11 +340,24 @@ export function createApp(overrides = {}) {
 
     if (method === "POST" && pathname === "/api/accounts/register") {
       rateLimit(`register:${ip}`, 10, 60 * 60 * 1000);
-      if (!config.registrationOpen) {
-        throw new HttpError(403, "Registration is disabled on this server", "registration_closed");
-      }
-
       const body = await readJson(req, maxBody);
+      if (!config.registrationOpen) {
+        if (config.inviteCodes.length === 0) {
+          throw new HttpError(403, "Registration is disabled on this server", "registration_closed");
+        }
+        const invite = typeof body.inviteCode === "string" ? body.inviteCode.trim() : "";
+        if (!invite) {
+          throw new HttpError(403, "An invite code is required to join this server", "invite_required");
+        }
+        // Check every code so timing does not reveal which one matched.
+        let matched = false;
+        for (const code of config.inviteCodes) {
+          if (safeEqualString(invite, code)) matched = true;
+        }
+        if (!matched) {
+          throw new HttpError(403, "That invite code is not valid", "invalid_invite");
+        }
+      }
       const email = readEmail(body.email);
       const authHash = readAuthHash(body.authHash);
       const kdfSalt = readBase64(body.kdfSalt, "kdfSalt", { minBytes: 16, maxBytes: 64 }).toString(

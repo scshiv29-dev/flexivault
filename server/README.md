@@ -83,6 +83,9 @@ clients can spoof the rate-limit key.
 | `DATA_DIR` | `server/data` | Database and generated key material |
 | `SERVER_NAME` | `FlexiVault` | Name returned by `/api/health` and `/api/server-info` |
 | `REGISTRATION_OPEN` | `true` | Allow new accounts |
+| `INVITE_CODES` | empty | Comma-separated codes that still allow sign-up when `REGISTRATION_OPEN=false` |
+| `PUBLIC_URL` | derived | Address shown on the `/connect` page and in its QR code, e.g. `https://vault.example.com` |
+| `CONNECT_PAGE` | `true` | Serve the QR connect page at `/` and `/connect` |
 | `CORS_ORIGINS` | `*` | Comma-separated allowed origins; `*` allows any |
 | `JWT_SECRET` | generated | 32+ byte token-signing secret |
 | `ENCRYPTION_SECRET` | generated | 32+ byte key for server-side TOTP secrets |
@@ -95,6 +98,53 @@ clients can spoof the rate-limit key.
 Create the account in the mobile app (`Settings → Server`). Registration is
 disabled with `REGISTRATION_OPEN=false` and the server returns
 `registration_closed`.
+
+## Connect phones with a QR code
+
+Open `https://<your server>/connect` in a browser. It shows a QR code with the
+server address (you can also pre-fill an email and invite code). In the app,
+tap **Scan QR code** on the *Sign in to a server* screen or in
+**Settings → Server**; on Android the system camera can open the code too.
+
+A signed-in phone can show the same kind of code for another phone:
+**Settings → Server → Show QR code**.
+
+The code is a `flexivault://connect?server=…&email=…&invite=…` link. It never
+contains the master password: that password is the only thing that can decrypt
+the vault, so it is typed on each device once. After that, turn on biometric
+unlock so you do not have to type it again.
+
+Behind a reverse proxy, set `PUBLIC_URL` (or `TRUST_PROXY=true` with a proxy
+that sets `X-Forwarded-Proto` / `X-Forwarded-Host`) so the QR code points at
+the public `https://` address rather than the container's internal one.
+
+## Multiple users
+
+One server holds any number of accounts. Each person signs up with their own
+email and master password and gets a separate vault; no one, including the
+server owner, can read another person's vault.
+
+To let only people you choose join:
+
+1. Set `REGISTRATION_OPEN=false` and `INVITE_CODES=some-long-random-code`.
+2. Give each person the code, or open `/connect?invite=some-long-random-code`
+   and let them scan it.
+3. They create a vault on their phone, then join from **Settings → Server**
+   (the invite field appears automatically).
+
+Rotate or remove a code by editing `INVITE_CODES` and restarting. Existing
+accounts keep working.
+
+Manage accounts from the server (in Docker, prefix with
+`docker compose exec server`):
+
+```bash
+npm run users -- list                       # email, item count, 2FA, dates
+npm run users -- delete someone@example.com # removes the account and its vault
+npm run users -- reset-2fa someone@example.com
+```
+
+There is no password reset: the server cannot decrypt anyone's vault.
 
 ## Data model
 
@@ -119,9 +169,10 @@ All routes are JSON under `/api` unless noted. Errors are
 
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
+| `GET` | `/` , `/connect` | — | HTML page with a QR code for the app (`?email=`, `?invite=` pre-fill it) |
 | `GET` | `/api/health` | — | Liveness and server name |
-| `GET` | `/api/server-info` | — | Registration status, limits, server time |
-| `POST` | `/api/accounts/register` | — | `{ email, authHash, kdfSalt, kdfIterations }` → token + profile |
+| `GET` | `/api/server-info` | — | Registration status, `inviteRequired`, limits, server time |
+| `POST` | `/api/accounts/register` | — | `{ email, authHash, kdfSalt, kdfIterations, inviteCode? }` → token + profile |
 | `POST` | `/api/accounts/prelogin` | — | `{ email }` → KDF salt/iterations and `totpEnabled` |
 | `POST` | `/api/accounts/login` | — | `{ email, authHash, totpCode? }` → token + profile |
 | `GET` | `/api/accounts/me` | Bearer | Current profile |
@@ -174,8 +225,7 @@ Restore by extracting the archive into an empty volume. Keep the generated
 - There is no password reset. Losing the master password means losing the
   vault; the server has no copy of the key.
 - No email verification, password change, or account deletion endpoint is
-  implemented. Delete the account by stopping the server and removing its rows
-  (or the whole data directory) manually.
+  implemented. Delete an account with `npm run users -- delete <email>`.
 - Rotating `ENCRYPTION_SECRET` invalidates stored TOTP secrets. Disable 2FA
   first or re-enroll afterwards.
 - This is a single-node server. Do not run multiple replicas against one
