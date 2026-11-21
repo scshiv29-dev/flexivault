@@ -11,6 +11,7 @@ WORKDIR /app
 # The server has no runtime dependencies; copy only what it needs.
 COPY package.json ./
 COPY src ./src
+COPY web ./web
 
 RUN mkdir -p /data && chown -R node:node /app /data
 USER node

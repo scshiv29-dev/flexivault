@@ -43,6 +43,10 @@ services:
       SERVER_NAME: "${SERVER_NAME:-FlexiVault}"
       REGISTRATION_OPEN: "${REGISTRATION_OPEN:-true}"
       INVITE_CODES: "${INVITE_CODES:-}"
+      ADMIN_EMAILS: "${ADMIN_EMAILS:-}"
+      SIGNUP_DOMAINS: "${SIGNUP_DOMAINS:-}"
+      SIGNUP_EMAILS: "${SIGNUP_EMAILS:-}"
+      SIGNUP_ALLOW_LOCAL: "${SIGNUP_ALLOW_LOCAL:-false}"
       PUBLIC_URL: "${PUBLIC_URL:-}"
       # "*" is quoted so the value remains a string if Coolify renders the
       # environment without Compose interpolation.

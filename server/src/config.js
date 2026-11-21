@@ -36,6 +36,12 @@ export function loadConfig(overrides = {}) {
     // Comma-separated codes that let someone register while REGISTRATION_OPEN
     // is false, so the owner can add family members without opening sign-up.
     inviteCodes: list(overrides.inviteCodes ?? process.env.INVITE_CODES),
+    // Accounts allowed to open the admin page in the web vault.
+    adminEmails: list(overrides.adminEmails ?? process.env.ADMIN_EMAILS).map((v) => v.toLowerCase()),
+    // Default sign-up filters; the admin page can change them at runtime.
+    signupDomains: overrides.signupDomains ?? process.env.SIGNUP_DOMAINS ?? "",
+    signupEmails: overrides.signupEmails ?? process.env.SIGNUP_EMAILS ?? "",
+    signupAllowLocal: overrides.signupAllowLocal ?? bool(process.env.SIGNUP_ALLOW_LOCAL, false),
     // Public address shown on the connect page and in its QR code. Derived
     // from the request when unset.
     publicUrl: (overrides.publicUrl ?? process.env.PUBLIC_URL ?? "").trim().replace(/\/+$/, ""),
@@ -50,6 +56,7 @@ export function loadConfig(overrides = {}) {
     tokenTtlSeconds: int(process.env.TOKEN_TTL_SECONDS, 60 * 60 * 24 * 30),
     maxVaultBytes: int(process.env.MAX_VAULT_BYTES, 8 * 1024 * 1024),
     maxItems: int(process.env.MAX_ITEMS, 5000),
+    registerRateLimit: int(overrides.registerRateLimit ?? process.env.REGISTER_RATE_LIMIT, 10),
     trustProxy: overrides.trustProxy ?? bool(process.env.TRUST_PROXY, false),
     quiet: overrides.quiet ?? bool(process.env.QUIET, false),
   };

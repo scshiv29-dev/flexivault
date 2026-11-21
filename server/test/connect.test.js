@@ -94,32 +94,55 @@ test("QR encoder produces valid sizes with finder patterns", () => {
   assert.throws(() => encodeQr("z".repeat(3000)), /too long/);
 });
 
-test("connect page shows a QR code for this server", async () => {
-  const response = await getPage("/connect?email=Ada@Example.com&invite=%3Cb%3E", {
+test("connect page is private while sign-up is closed", async () => {
+  const closed = await getPage("/connect", { host: "vault.example.com" });
+  assert.equal(closed.status, 403);
+  assert.match(closed.body, /is private/);
+  assert.doesNotMatch(closed.body, /<svg/);
+
+  const wrong = await getPage("/connect?invite=nope");
+  assert.equal(wrong.status, 403);
+});
+
+test("connect page shows a QR code to holders of an invite code", async () => {
+  const response = await getPage("/connect?email=Ada@Example.com&invite=friends", {
     host: "vault.example.com",
   });
   assert.equal(response.status, 200);
   assert.match(response.headers["content-type"], /text\/html/);
   assert.match(response.headers["content-security-policy"], /default-src 'none'/);
-  const body = response.body;
-  assert.match(body, /<svg[^>]+aria-label="Scan to connect FlexiVault"/);
-  assert.match(body, /http:\/\/vault\.example\.com/);
-  assert.match(body, /ada@example\.com/);
-  assert.match(body, /&lt;b&gt;/);
-  assert.doesNotMatch(body, /<b>/);
-  assert.match(body, /invite code/i);
+  assert.match(response.body, /<svg[^>]+aria-label="Scan to connect FlexiVault"/);
+  assert.match(response.body, /http:\/\/vault\.example\.com/);
+  assert.match(response.body, /ada@example\.com/);
+});
 
-  const root = await getPage("/");
-  assert.equal(root.status, 200);
+test("connect page escapes what it echoes", async () => {
+  const response = await getPage("/connect?invite=friends&email=%3Cb%3E@x.co");
+  assert.match(response.body, /&lt;b&gt;@x\.co/);
+  assert.doesNotMatch(response.body, /<b>@/);
 });
 
 test("forwarded host is ignored unless TRUST_PROXY is on", async () => {
-  const { body } = await getPage("/connect", {
+  const { body } = await getPage("/connect?invite=friends", {
     host: "real.example.com",
     "x-forwarded-host": "evil.example.com",
   });
   assert.match(body, /real\.example\.com/);
   assert.doesNotMatch(body, /evil\.example\.com/);
+});
+
+test("web vault files are served with a strict CSP and nothing else is", async () => {
+  const root = await getPage("/");
+  assert.equal(root.status, 302);
+  assert.equal(root.headers.location, "/app/");
+  for (const file of ["", "app.js", "app.css", "crypto.js", "otp.js", "qr.js"]) {
+    const page = await getPage(`/app/${file}`);
+    assert.equal(page.status, 200, file);
+    assert.match(page.headers["content-security-policy"], /script-src 'self'/);
+  }
+  for (const bad of ["../src/app.js", "%2e%2e/package.json", "nope.js", "sub/app.js"]) {
+    assert.equal((await getPage(`/app/${bad}`)).status, 404, bad);
+  }
 });
 
 test("invite codes allow registration while sign-up is closed", async () => {
