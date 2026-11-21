@@ -62,6 +62,22 @@ export function openDatabase(dataDir) {
 
     CREATE INDEX IF NOT EXISTS idx_unlock_shares_user ON unlock_shares(user_id);
 
+    -- Admin-created invite links. Only a SHA-256 of the token is stored; the
+    -- link itself is shown once when it is created.
+    CREATE TABLE IF NOT EXISTS invites (
+      id TEXT PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE,
+      email TEXT,
+      domains TEXT,
+      note TEXT,
+      max_uses INTEGER NOT NULL DEFAULT 1,
+      uses INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      revoked_at INTEGER
+    );
+
     CREATE TABLE IF NOT EXISTS server_meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL

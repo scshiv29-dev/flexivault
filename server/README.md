@@ -82,10 +82,15 @@ clients can spoof the rate-limit key.
 | `PORT` | `8787` | Listen port |
 | `DATA_DIR` | `server/data` | Database and generated key material |
 | `SERVER_NAME` | `FlexiVault` | Name returned by `/api/health` and `/api/server-info` |
-| `REGISTRATION_OPEN` | `true` | Allow new accounts |
-| `INVITE_CODES` | empty | Comma-separated codes that still allow sign-up when `REGISTRATION_OPEN=false` |
-| `PUBLIC_URL` | derived | Address shown on the `/connect` page and in its QR code, e.g. `https://vault.example.com` |
-| `CONNECT_PAGE` | `true` | Serve the QR connect page at `/` and `/connect` |
+| `REGISTRATION_OPEN` | `true` | Default for open sign-up (the admin page can change it) |
+| `ADMIN_EMAILS` | empty | Comma-separated accounts that get the web **Admin** page; they can always register |
+| `SIGNUP_DOMAINS` | empty | Default allowed email domains, e.g. `example.com,*.corp.org` (empty = any) |
+| `SIGNUP_EMAILS` | empty | Default allowed email addresses, even outside `SIGNUP_DOMAINS` |
+| `SIGNUP_ALLOW_LOCAL` | `false` | Default for letting localhost / private-network clients sign up without an invite |
+| `INVITE_CODES` | empty | Comma-separated static codes that still allow sign-up when sign-up is closed |
+| `PUBLIC_URL` | derived | Public address used in QR codes and invite links, e.g. `https://vault.example.com` |
+| `CONNECT_PAGE` | `true` | Serve the QR connect page at `/connect` |
+| `REGISTER_RATE_LIMIT` | `10` | Sign-ups per hour per IP |
 | `CORS_ORIGINS` | `*` | Comma-separated allowed origins; `*` allows any |
 | `JWT_SECRET` | generated | 32+ byte token-signing secret |
 | `ENCRYPTION_SECRET` | generated | 32+ byte key for server-side TOTP secrets |
@@ -95,14 +100,46 @@ clients can spoof the rate-limit key.
 | `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` for rate limiting |
 | `QUIET` | `false` | Disable request logging |
 
-Create the account in the mobile app (`Settings → Server`). Registration is
-disabled with `REGISTRATION_OPEN=false` and the server returns
-`registration_closed`.
+The sign-up settings (`REGISTRATION_OPEN`, `SIGNUP_*`) are only defaults.
+Once an admin saves **Who can sign up** on the web Admin page, the saved rules
+win until changed there again.
+
+## Web vault
+
+The server hosts a browser vault at `https://<your server>/app/` (`/`
+redirects there). Users sign in with the same email and master password as
+the app and can search, view, add, edit and delete items, copy passwords and
+live 2FA codes, and filter by:
+
+- **Type**: logins, 2FA codes, notes, cards, identities
+- **Domain**: grouped by site (`login.github.com` and `github.com` →
+  `github.com`)
+- **Email / username**: every account name used in the vault
+- **Localhost & LAN**: `localhost`, private IPs (`192.168.x`, `10.x`, …) and
+  names such as `router.lan` or `nas.local`
+- **Favorites**, plus free-text search
+
+Decryption happens in the browser with the same format as the app and
+extension (PBKDF2-SHA256 → AES-256-GCM envelopes), and edits sync with the
+same revision and merge rules, so changes appear on phones on their next sync.
+The vault locks after 15 minutes without activity or on reload.
+
+**Connect a phone** in the web vault shows a QR code with the server and the
+user's email for the app to scan.
+
+The web vault's code is served by your server, as with any web password
+manager. Someone who controls the server could change it, so only use it
+on a server you trust, over HTTPS.
 
 ## Connect phones with a QR code
 
-Open `https://<your server>/connect` in a browser. It shows a QR code with the
-server address (you can also pre-fill an email and invite code). In the app,
+Signed-in users get their QR code from **Connect a phone** in the web vault,
+and new users get one right after creating their account from an invite link.
+
+`https://<your server>/connect` also shows a QR code with the server address,
+but only while sign-up is open, to visitors from the local network when that is
+allowed, or with a valid invite (`/connect?invite=…`). Otherwise it shows a
+"this server is private" page. In the app,
 tap **Scan QR code** on the *Sign in to a server* screen or in
 **Settings → Server**; on Android the system camera can open the code too.
 
@@ -118,25 +155,56 @@ Behind a reverse proxy, set `PUBLIC_URL` (or `TRUST_PROXY=true` with a proxy
 that sets `X-Forwarded-Proto` / `X-Forwarded-Host`) so the QR code points at
 the public `https://` address rather than the container's internal one.
 
-## Multiple users
+## Multiple users and invites
 
-One server holds any number of accounts. Each person signs up with their own
-email and master password and gets a separate vault; no one, including the
-server owner, can read another person's vault.
+One server holds any number of accounts. Each person has their own email,
+master password and vault; nobody, including admins, can read anyone else's
+items.
 
-To let only people you choose join:
+### Set up the admin
 
-1. Set `REGISTRATION_OPEN=false` and `INVITE_CODES=some-long-random-code`.
-2. Give each person the code, or open `/connect?invite=some-long-random-code`
-   and let them scan it.
-3. They create a vault on their phone, then join from **Settings → Server**
-   (the invite field appears automatically).
+1. Set `ADMIN_EMAILS=you@example.com` and restart. Sign-up can stay closed:
+   admin emails can always register.
+2. Open `https://<your server>/app/`, choose **Create an account**, and sign up
+   with that email. (Or sign in if the account already exists from the app.)
+3. **Admin** appears in the top bar.
 
-Rotate or remove a code by editing `INVITE_CODES` and restarting. Existing
-accounts keep working.
+### Invite someone
 
-Manage accounts from the server (in Docker, prefix with
-`docker compose exec server`):
+On the Admin page, **Invite someone** creates a private link such as
+`https://vault.example.com/app/#/join/fvi_…`. Optionally lock it to one email
+(single use) or to email domains, and set the number of uses and the expiry
+(1–90 days). The link is shown once; copy it or let the person scan its QR code
+with their phone camera. Revoke unused links from the **Invite links** table.
+
+The person opens the link, picks a master password, and their account is
+created. They then see a QR code for the app (**Sign in to a server → Scan QR
+code**) or can type the server address, email and password by hand, and can
+use the web vault straight away.
+
+Invite links work even when sign-up is closed and ignore the server-wide email
+filters, but always apply their own email/domain lock. Only a SHA-256 of each
+link is stored.
+
+### Who can sign up
+
+**Who can sign up** on the Admin page controls everyone without an invite link:
+
+- **Open sign-up** on or off
+- **Allowed email domains** (`example.com`, `*.corp.org` for subdomains) and
+  **allowed email addresses**; empty means any
+- **Allow sign-up from localhost and the home network**: requests from
+  `127.0.0.1`, `10.x`, `172.16–31.x`, `192.168.x` and IPv6 local addresses can
+  sign up without an invite. Behind a reverse proxy this needs
+  `TRUST_PROXY=true`, otherwise every request looks local.
+
+Static `INVITE_CODES` still work (typed into the app's invite field or the
+web sign-up page) and are subject to the email filters.
+
+### Manage accounts
+
+The Admin page lists accounts (item count, 2FA, dates) and can delete one.
+From a shell on the server (in Docker, prefix with `docker compose exec server`):
 
 ```bash
 npm run users -- list                       # email, item count, 2FA, dates
@@ -153,6 +221,9 @@ SQLite tables:
 - `users` — email, scrypt-hashed `authHash`, KDF salt/iterations, revision,
   optional encrypted TOTP secret
 - `vault_items` — `(user_id, item_id)` plus an opaque `data` envelope
+- `invites` — admin invite links: SHA-256 of the token, optional email/domain
+  lock, uses, expiry, revocation
+- `server_meta` — server settings, including the admin's saved sign-up rules
 - `unlock_shares` — extension TOTP quick unlock: a random share (encrypted with
   the server key), SHA-256 of a device secret, last accepted TOTP step, failure
   count and a 30-day expiry. The share alone cannot decrypt anything; the
@@ -169,10 +240,12 @@ All routes are JSON under `/api` unless noted. Errors are
 
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
-| `GET` | `/` , `/connect` | — | HTML page with a QR code for the app (`?email=`, `?invite=` pre-fill it) |
+| `GET` | `/app/` | — | Web vault (static files; `/` redirects here) |
+| `GET` | `/connect` | — | QR page for the app; private unless sign-up is open, the visitor is local (when allowed) or `?invite=` is valid |
+| `GET` | `/api/invites/:token` | — | Invite link details: `{ serverName, email, domains, expiresAt }` or `404 invite_invalid` |
 | `GET` | `/api/health` | — | Liveness and server name |
 | `GET` | `/api/server-info` | — | Registration status, `inviteRequired`, limits, server time |
-| `POST` | `/api/accounts/register` | — | `{ email, authHash, kdfSalt, kdfIterations, inviteCode? }` → token + profile |
+| `POST` | `/api/accounts/register` | — | `{ email, authHash, kdfSalt, kdfIterations, inviteCode? }` → token + profile; `inviteCode` is an invite link token or a static code |
 | `POST` | `/api/accounts/prelogin` | — | `{ email }` → KDF salt/iterations and `totpEnabled` |
 | `POST` | `/api/accounts/login` | — | `{ email, authHash, totpCode? }` → token + profile |
 | `GET` | `/api/accounts/me` | Bearer | Current profile |
@@ -184,6 +257,14 @@ All routes are JSON under `/api` unless noted. Errors are
 | `POST` | `/api/quick-unlock/revoke` | — | `{ id, deviceSecret }` → `{ revoked: true }` |
 | `GET` | `/api/sync` | Bearer | `{ revision, items: [{ id, data, updatedAt }] }` |
 | `PUT` | `/api/sync` | Bearer | `{ baseRevision, items, force? }` → new revision |
+| `GET` | `/api/admin/overview` | Admin | `{ rules, users, invites }` (no item contents) |
+| `PUT` | `/api/admin/rules` | Admin | `{ registrationOpen?, allowLocal?, allowedDomains?, allowedEmails? }` |
+| `POST` | `/api/admin/invites` | Admin | `{ email?, domains?, maxUses?, expiresInDays?, note? }` → `{ invite, token, url }` |
+| `DELETE` | `/api/admin/invites/:id` | Admin | Revoke an invite link |
+| `DELETE` | `/api/admin/users/:email` | Admin | Delete another account and its vault |
+
+Profiles (`register`, `login`, `me`) include `isAdmin`. Sign-up errors:
+`invite_required`, `invalid_invite`, `email_not_allowed`, `registration_closed`.
 
 `PUT /api/sync` replaces the whole item set. A stale `baseRevision` returns
 `409 revision_mismatch` with the current revision and items so the client can

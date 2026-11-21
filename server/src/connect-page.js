@@ -106,3 +106,38 @@ button { margin-top:14px; width:100%; font:inherit; font-weight:600; padding:11p
 </body>
 </html>`;
 }
+
+/** Shown at /connect when sign-up is closed and no valid invite was given. */
+export function renderPrivatePage({ serverName }) {
+  const name = escapeHtml(serverName);
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${name}</title>
+<style>
+:root { --bg:#f6f5f1; --card:#fff; --ink:#1b1b1a; --muted:#6b6a66; --line:#e3e1da; --accent:#2f6f4f; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#111211; --card:#1b1c1b; --ink:#ecebe6; --muted:#a3a29c; --line:#2c2d2b; --accent:#7cc39c; }
+}
+body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+main { max-width:480px; margin:0 auto; padding:48px 16px; }
+h1 { font-size:26px; line-height:1.2; margin:0 0 8px; }
+p { color:var(--muted); margin:0 0 12px; }
+a { color:var(--accent); font-weight:600; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px; margin-top:20px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>${name} is private</h1>
+  <p>New accounts on this server are by invitation only. Ask the server admin for an invite link.</p>
+  <div class="card">
+    <p>Already have an account? <a href="/app/">Sign in to the web vault</a>. Its <strong>Connect a phone</strong> button shows a QR code for your phone.</p>
+  </div>
+</main>
+</body>
+</html>`;
+}

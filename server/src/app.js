@@ -1,4 +1,7 @@
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { openDatabase } from "./db.js";
 import { loadConfig } from "./config.js";
@@ -13,7 +16,16 @@ import {
   signToken,
   verifyToken,
 } from "./crypto.js";
-import { renderConnectPage } from "./connect-page.js";
+import { renderConnectPage, renderPrivatePage } from "./connect-page.js";
+import {
+  decideRegistration,
+  defaultRules,
+  emailAllowed,
+  isLocalAddress,
+  normaliseDomain,
+  sanitiseRules,
+  splitList,
+} from "./signup.js";
 import { generateTotpSecret, matchTotpStep, otpauthUrl, verifyTotp } from "./totp.js";
 
 const JSON_LIMIT_DEFAULT = 8 * 1024 * 1024;
@@ -24,6 +36,24 @@ const SHARE_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
 const QUICK_UNLOCK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const QUICK_UNLOCK_MAX_SHARES = 10;
 const QUICK_UNLOCK_MAX_FAILURES = 5;
+const INVITE_PREFIX = "fvi_";
+const INVITE_ID_RE = /^[A-Za-z0-9_-]{8,32}$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// The web vault: static files served from server/web, plus the shared QR
+// encoder from src. Only these files are served, so no path traversal.
+const here = path.dirname(fileURLToPath(import.meta.url));
+const WEB_FILES = {
+  "index.html": [path.join(here, "..", "web", "index.html"), "text/html; charset=utf-8"],
+  "app.css": [path.join(here, "..", "web", "app.css"), "text/css; charset=utf-8"],
+  "app.js": [path.join(here, "..", "web", "app.js"), "text/javascript; charset=utf-8"],
+  "crypto.js": [path.join(here, "..", "web", "crypto.js"), "text/javascript; charset=utf-8"],
+  "otp.js": [path.join(here, "..", "web", "otp.js"), "text/javascript; charset=utf-8"],
+  "qr.js": [path.join(here, "qr.js"), "text/javascript; charset=utf-8"],
+};
+const WEB_CSP =
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
+  "connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 class HttpError extends Error {
   constructor(status, message, code, extra = {}) {
@@ -247,6 +277,106 @@ export function createApp(overrides = {}) {
     }
   }
 
+  function isAdmin(user) {
+    return config.adminEmails.includes(String(user.email).toLowerCase());
+  }
+
+  function profile(user) {
+    return { ...publicUser(user), isAdmin: isAdmin(user) };
+  }
+
+  // Sign-up rules: env defaults until an admin saves them in the database.
+  function loadRules() {
+    const row = db.prepare("SELECT value FROM server_meta WHERE key = 'signup_rules'").get();
+    const defaults = defaultRules(config);
+    if (!row) return defaults;
+    try {
+      return { ...defaults, ...JSON.parse(row.value) };
+    } catch {
+      return defaults;
+    }
+  }
+
+  function saveRules(rules) {
+    db.prepare(
+      `INSERT INTO server_meta (key, value) VALUES ('signup_rules', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run(JSON.stringify(rules));
+  }
+
+  /**
+   * True for loopback / private-network clients. A request relayed by a
+   * proxy we were not told to trust reports the proxy's (usually private)
+   * address, so it never counts as local.
+   */
+  function isLocalRequest(req, ip) {
+    if (!config.trustProxy && req.headers["x-forwarded-for"]) return false;
+    return isLocalAddress(ip);
+  }
+
+  function invitesPossible(rules) {
+    return !rules.registrationOpen && (config.inviteCodes.length > 0 || config.adminEmails.length > 0);
+  }
+
+  /** Active invite for a link token, or null. */
+  function findInvite(token) {
+    if (typeof token !== "string" || !token.startsWith(INVITE_PREFIX) || token.length > 128) {
+      return null;
+    }
+    const row = db.prepare("SELECT * FROM invites WHERE token_hash = ?").get(sha256(token));
+    if (!row || row.revoked_at || row.expires_at <= Date.now() || row.uses >= row.max_uses) {
+      return null;
+    }
+    return row;
+  }
+
+  function inviteSummary(row) {
+    const now = Date.now();
+    return {
+      id: row.id,
+      email: row.email ?? null,
+      domains: splitList(row.domains),
+      note: row.note ?? "",
+      maxUses: row.max_uses,
+      uses: row.uses,
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+      status: row.revoked_at
+        ? "revoked"
+        : row.uses >= row.max_uses
+          ? "used"
+          : row.expires_at <= now
+            ? "expired"
+            : "active",
+    };
+  }
+
+  function requireAdmin(req) {
+    const user = authenticate(req);
+    if (!isAdmin(user)) throw new HttpError(403, "Admins only", "forbidden");
+    return user;
+  }
+
+  function serveWebFile(res, name) {
+    const entry = WEB_FILES[name];
+    if (!entry) throw new HttpError(404, "Not found", "not_found");
+    let body;
+    try {
+      body = fs.readFileSync(entry[0]);
+    } catch {
+      throw new HttpError(404, "Not found", "not_found");
+    }
+    res.writeHead(200, {
+      "Content-Type": entry[1],
+      "Content-Length": body.length,
+      "Cache-Control": "no-cache",
+      "Content-Security-Policy": WEB_CSP,
+      "X-Frame-Options": "DENY",
+    });
+    res.end(body);
+  }
+
   function getTotpSecret(user) {
     if (!user.totp_secret) return null;
     try {
@@ -307,10 +437,41 @@ export function createApp(overrides = {}) {
       return;
     }
 
-    if (method === "GET" && (pathname === "/" || pathname === "/connect")) {
+    if (method === "GET" && pathname === "/") {
+      res.writeHead(302, { Location: "/app/" });
+      res.end();
+      return;
+    }
+
+    if (method === "GET" && (pathname === "/app" || pathname.startsWith("/app/"))) {
+      if (pathname === "/app") {
+        res.writeHead(301, { Location: "/app/" });
+        res.end();
+        return;
+      }
+      const name = pathname.slice(5) || "index.html";
+      serveWebFile(res, name);
+      return;
+    }
+
+    if (method === "GET" && pathname === "/connect") {
       if (!config.connectPage) throw new HttpError(404, "Not found", "not_found");
       rateLimit(`connect-page:${ip}`, 120, 15 * 60 * 1000);
       const param = (name, max) => String(parsedUrl.searchParams.get(name) ?? "").trim().slice(0, max);
+      const rules = loadRules();
+      const invite = param("invite", 128);
+      // With sign-up closed, the QR page is only for people who were given an
+      // invite, or who are on the local network when that is allowed. Signed-in
+      // users get their own QR code inside the web vault.
+      const allowed =
+        rules.registrationOpen ||
+        (rules.allowLocal && isLocalRequest(req, ip)) ||
+        Boolean(findInvite(invite)) ||
+        (invite && config.inviteCodes.some((code) => safeEqualString(invite, code)));
+      if (!allowed) {
+        html(res, 403, renderPrivatePage({ serverName: config.serverName }));
+        return;
+      }
       html(
         res,
         200,
@@ -318,11 +479,26 @@ export function createApp(overrides = {}) {
           serverName: config.serverName,
           serverUrl: publicBaseUrl(req, config),
           email: normaliseEmail(param("email", 320)),
-          invite: param("invite", 128),
-          registrationOpen: config.registrationOpen,
-          inviteRequired: !config.registrationOpen && config.inviteCodes.length > 0,
+          invite,
+          registrationOpen: rules.registrationOpen,
+          inviteRequired: invitesPossible(rules),
         })
       );
+      return;
+    }
+
+    if (method === "GET" && pathname.startsWith("/api/invites/")) {
+      rateLimit(`invite-lookup:${ip}`, 60, 15 * 60 * 1000);
+      const invite = findInvite(decodeURIComponent(pathname.slice("/api/invites/".length)));
+      if (!invite) {
+        throw new HttpError(404, "This invite link is invalid, used or expired", "invite_invalid");
+      }
+      json(res, 200, {
+        serverName: config.serverName,
+        email: invite.email ?? null,
+        domains: splitList(invite.domains),
+        expiresAt: invite.expires_at,
+      });
       return;
     }
 
@@ -330,8 +506,8 @@ export function createApp(overrides = {}) {
       json(res, 200, {
         name: config.serverName,
         version: "1.0.0",
-        registrationOpen: config.registrationOpen,
-        inviteRequired: !config.registrationOpen && config.inviteCodes.length > 0,
+        registrationOpen: loadRules().registrationOpen,
+        inviteRequired: invitesPossible(loadRules()),
         maxItems: config.maxItems,
         serverTime: new Date().toISOString(),
       });
@@ -339,26 +515,38 @@ export function createApp(overrides = {}) {
     }
 
     if (method === "POST" && pathname === "/api/accounts/register") {
-      rateLimit(`register:${ip}`, 10, 60 * 60 * 1000);
+      rateLimit(`register:${ip}`, config.registerRateLimit, 60 * 60 * 1000);
       const body = await readJson(req, maxBody);
-      if (!config.registrationOpen) {
-        if (config.inviteCodes.length === 0) {
-          throw new HttpError(403, "Registration is disabled on this server", "registration_closed");
-        }
-        const invite = typeof body.inviteCode === "string" ? body.inviteCode.trim() : "";
-        if (!invite) {
-          throw new HttpError(403, "An invite code is required to join this server", "invite_required");
-        }
-        // Check every code so timing does not reveal which one matched.
-        let matched = false;
+      const email = readEmail(body.email);
+      const inviteInput = typeof body.inviteCode === "string" ? body.inviteCode.trim() : "";
+      const rules = loadRules();
+      const linkInvite = inviteInput.startsWith(INVITE_PREFIX) ? findInvite(inviteInput) : null;
+      if (inviteInput.startsWith(INVITE_PREFIX) && !linkInvite) {
+        throw new HttpError(403, "This invite link is invalid, used or expired", "invalid_invite");
+      }
+      // Check every static code so timing does not reveal which one matched.
+      let staticCodeOk = false;
+      if (inviteInput && !linkInvite) {
         for (const code of config.inviteCodes) {
-          if (safeEqualString(invite, code)) matched = true;
-        }
-        if (!matched) {
-          throw new HttpError(403, "That invite code is not valid", "invalid_invite");
+          if (safeEqualString(inviteInput, code)) staticCodeOk = true;
         }
       }
-      const email = readEmail(body.email);
+      const decision = decideRegistration({
+        email,
+        rules,
+        adminEmails: config.adminEmails,
+        invite: linkInvite,
+        staticCodeOk,
+        ip: isLocalRequest(req, ip) ? ip : "",
+      });
+      if (!decision) {
+        if (inviteInput) throw new HttpError(403, "That invite code is not valid", "invalid_invite");
+        if (invitesPossible(rules)) {
+          throw new HttpError(403, "An invite is required to join this server", "invite_required");
+        }
+        throw new HttpError(403, "Registration is disabled on this server", "registration_closed");
+      }
+      if (!decision.ok) throw new HttpError(decision.status, decision.message, decision.code);
       const authHash = readAuthHash(body.authHash);
       const kdfSalt = readBase64(body.kdfSalt, "kdfSalt", { minBytes: 16, maxBytes: 64 }).toString(
         "base64"
@@ -375,17 +563,36 @@ export function createApp(overrides = {}) {
       const verifier = scryptHash(authHash, authSalt);
       const now = Date.now();
 
-      db.prepare(
-        `INSERT INTO users
-          (id, email, auth_verifier, auth_salt, kdf_salt, kdf_iterations, revision, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`
-      ).run(id, email, verifier, authSalt, kdfSalt, kdfIterations, now, now);
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        if (linkInvite) {
+          // Consume one use atomically so a link cannot be used twice at once.
+          const used = db
+            .prepare(
+              `UPDATE invites SET uses = uses + 1
+               WHERE id = ? AND uses < max_uses AND revoked_at IS NULL AND expires_at > ?`
+            )
+            .run(linkInvite.id, now);
+          if (used.changes !== 1) {
+            throw new HttpError(403, "This invite link is invalid, used or expired", "invalid_invite");
+          }
+        }
+        db.prepare(
+          `INSERT INTO users
+            (id, email, auth_verifier, auth_salt, kdf_salt, kdf_iterations, revision, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`
+        ).run(id, email, verifier, authSalt, kdfSalt, kdfIterations, now, now);
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
 
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(id);
       json(res, 201, {
         token: issueToken(user),
         expiresIn: config.tokenTtlSeconds,
-        ...publicUser(user),
+        ...profile(user),
         revision: 0,
       });
       return;
@@ -444,14 +651,14 @@ export function createApp(overrides = {}) {
       json(res, 200, {
         token: issueToken(user),
         expiresIn: config.tokenTtlSeconds,
-        ...publicUser(user),
+        ...profile(user),
       });
       return;
     }
 
     if (method === "GET" && pathname === "/api/accounts/me") {
       const user = authenticate(req);
-      json(res, 200, publicUser(user));
+      json(res, 200, profile(user));
       return;
     }
 
@@ -634,7 +841,7 @@ export function createApp(overrides = {}) {
         share,
         token: issueToken(user),
         expiresIn: config.tokenTtlSeconds,
-        ...publicUser(user),
+        ...profile(user),
       });
       return;
     }
@@ -699,6 +906,102 @@ export function createApp(overrides = {}) {
       const revision = markRevision(user.id);
       json(res, 200, { revision, itemCount: items.length, updatedAt: Date.now() });
       return;
+    }
+
+    if (pathname.startsWith("/api/admin/")) {
+      const admin = requireAdmin(req);
+      rateLimit(`admin:${admin.id}`, 300, 15 * 60 * 1000);
+
+      if (method === "GET" && pathname === "/api/admin/overview") {
+        const users = db
+          .prepare(
+            `SELECT u.email, u.totp_enabled AS totp, u.created_at AS createdAt, u.updated_at AS updatedAt,
+                    (SELECT COUNT(*) FROM vault_items v WHERE v.user_id = u.id) AS records
+             FROM users u ORDER BY u.created_at`
+          )
+          .all()
+          .map((row) => ({
+            email: row.email,
+            totpEnabled: Boolean(row.totp),
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+            records: row.records,
+            isAdmin: config.adminEmails.includes(row.email),
+          }));
+        const invites = db
+          .prepare("SELECT * FROM invites ORDER BY created_at DESC LIMIT 200")
+          .all()
+          .map(inviteSummary);
+        json(res, 200, {
+          rules: loadRules(),
+          staticInviteCodes: config.inviteCodes.length,
+          adminEmails: config.adminEmails,
+          users,
+          invites,
+        });
+        return;
+      }
+
+      if (method === "PUT" && pathname === "/api/admin/rules") {
+        const body = await readJson(req, 64 * 1024);
+        const result = sanitiseRules(body, loadRules());
+        if (result.error) throw new HttpError(400, result.error, "invalid_rules");
+        saveRules(result.rules);
+        json(res, 200, { rules: result.rules });
+        return;
+      }
+
+      if (method === "POST" && pathname === "/api/admin/invites") {
+        const body = await readJson(req, 32 * 1024);
+        const email = body.email ? readEmail(body.email) : null;
+        const domains = splitList(body.domains).map(normaliseDomain);
+        const check = sanitiseRules({ allowedDomains: domains }, {});
+        if (check.error) throw new HttpError(400, check.error, "invalid_request");
+        if (email && domains.length && !emailAllowed(email, { allowedDomains: domains })) {
+          throw new HttpError(400, "The email is outside the invite's domains", "invalid_request");
+        }
+        const maxUses = email ? 1 : Math.min(100, Math.max(1, Number.parseInt(body.maxUses, 10) || 1));
+        const days = Math.min(90, Math.max(1, Number.parseInt(body.expiresInDays, 10) || 7));
+        const note = typeof body.note === "string" ? body.note.trim().slice(0, 200) : "";
+        const token = INVITE_PREFIX + randomToken(24);
+        const id = randomToken(9);
+        const now = Date.now();
+        db.prepare(
+          `INSERT INTO invites (id, token_hash, email, domains, note, max_uses, uses, created_by, created_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
+        ).run(id, sha256(token), email, domains.join(","), note, maxUses, admin.email, now, now + days * DAY_MS);
+        const row = db.prepare("SELECT * FROM invites WHERE id = ?").get(id);
+        json(res, 201, {
+          invite: inviteSummary(row),
+          token,
+          url: `${publicBaseUrl(req, config)}/app/#/join/${token}`,
+        });
+        return;
+      }
+
+      if (method === "DELETE" && pathname.startsWith("/api/admin/invites/")) {
+        const id = pathname.slice("/api/admin/invites/".length);
+        if (!INVITE_ID_RE.test(id)) throw new HttpError(404, "Invite not found", "not_found");
+        const result = db
+          .prepare("UPDATE invites SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+          .run(Date.now(), id);
+        if (result.changes !== 1) throw new HttpError(404, "Invite not found", "not_found");
+        json(res, 200, { revoked: true });
+        return;
+      }
+
+      if (method === "DELETE" && pathname.startsWith("/api/admin/users/")) {
+        const email = readEmail(decodeURIComponent(pathname.slice("/api/admin/users/".length)));
+        if (email === admin.email) {
+          throw new HttpError(400, "You cannot delete your own account here", "invalid_request");
+        }
+        const result = db.prepare("DELETE FROM users WHERE email = ?").run(email);
+        if (result.changes !== 1) throw new HttpError(404, "No account for that email", "not_found");
+        json(res, 200, { deleted: true });
+        return;
+      }
+
+      throw new HttpError(404, "Not found", "not_found");
     }
 
     throw new HttpError(404, "Not found", "not_found");
